@@ -22,7 +22,7 @@ pub struct BlindingKey(#[serde(with = "hex_bytes")] pub [u8; 32]);
 ///
 /// This is the user's root identity secret — must be kept private.
 /// A single master secret deterministically produces L different nullifiers
-/// (one per service provider) via `HKDF(master_secret, salt=service_name)`.
+/// (one per service provider) via `HKDF(master_secret, salt=username)`.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MasterSecret(#[serde(with = "hex_bytes")] pub [u8; 32]);
 

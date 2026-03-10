@@ -31,13 +31,13 @@ const CRS_DST: &[u8] = b"CRS-ASC-v1";
 
 /// A service provider registered in the CRS.
 ///
-/// Each provider has a unique name `v_l`, a credential generator `G_auth_l`,
-/// and an origin URL for man-in-the-middle prevention.
+/// Each provider has a unique username `v_l` (every user is also a service
+/// provider), a credential generator `G_auth_l`, and an origin URL.
 #[derive(Debug, Clone)]
 pub struct ServiceProvider {
-    /// Unique service name v_l (e.g., "twitter.com").
-    /// This is used as the HKDF salt for nullifier derivation.
-    pub name: Name,
+    /// Unique username v_l — every user is also a service provider.
+    /// Used as the HKDF salt for nullifier derivation.
+    pub username: Name,
     /// Credential generator G_auth_l (compressed secp256k1 point).
     /// Application-specific public key for the service's auth scheme.
     pub credential_generator: [u8; 33],
@@ -131,9 +131,9 @@ impl Crs {
         &self.generators[l - 1]
     }
 
-    /// Returns the service provider names as a slice of `Name`.
-    pub fn service_names(&self) -> Vec<Name> {
-        self.providers.iter().map(|p| p.name.clone()).collect()
+    /// Returns the usernames of all registered service providers.
+    pub fn usernames(&self) -> Vec<Name> {
+        self.providers.iter().map(|p| p.username.clone()).collect()
     }
 
     /// Compute the multi-value Pedersen commitment (master identity Φ):
@@ -202,7 +202,7 @@ impl Crs {
 
         // providers
         for provider in &self.providers {
-            let name_bytes = provider.name.as_str().as_bytes();
+            let name_bytes = provider.username.as_str().as_bytes();
             buf.extend_from_slice(&(name_bytes.len() as u16).to_be_bytes());
             buf.extend_from_slice(name_bytes);
             buf.extend_from_slice(&provider.credential_generator);
@@ -315,7 +315,7 @@ impl Crs {
             pos += origin_len;
 
             providers.push(ServiceProvider {
-                name,
+                username: name,
                 credential_generator,
                 origin,
             });
@@ -337,11 +337,11 @@ mod tests {
     use crate::nullifier_v2::derive_all_nullifiers;
     use crate::types::MasterSecret;
 
-    fn make_provider(name: &str) -> ServiceProvider {
+    fn make_provider(username: &str) -> ServiceProvider {
         ServiceProvider {
-            name: Name::new(name),
+            username: Name::new(username),
             credential_generator: [0x02; 33], // placeholder compressed point
-            origin: format!("https://{name}"),
+            origin: format!("https://{username}"),
         }
     }
 
@@ -421,7 +421,7 @@ mod tests {
     fn commit_master_identity_deterministic() {
         let crs = Crs::setup(make_providers(3));
         let secret = MasterSecret([0x42u8; 32]);
-        let names = crs.service_names();
+        let names = crs.usernames();
         let nullifiers = derive_all_nullifiers(&secret, &names);
         let blinding = BlindingKey([0x07u8; 32]);
 
@@ -434,7 +434,7 @@ mod tests {
     fn commit_different_blinding_gives_different_commitment() {
         let crs = Crs::setup(make_providers(3));
         let secret = MasterSecret([0x42u8; 32]);
-        let names = crs.service_names();
+        let names = crs.usernames();
         let nullifiers = derive_all_nullifiers(&secret, &names);
 
         let c1 = crs
@@ -451,8 +451,8 @@ mod tests {
         let crs = Crs::setup(make_providers(3));
         let blinding = BlindingKey([0x07u8; 32]);
 
-        let nuls1 = derive_all_nullifiers(&MasterSecret([0x01u8; 32]), &crs.service_names());
-        let nuls2 = derive_all_nullifiers(&MasterSecret([0x02u8; 32]), &crs.service_names());
+        let nuls1 = derive_all_nullifiers(&MasterSecret([0x01u8; 32]), &crs.usernames());
+        let nuls2 = derive_all_nullifiers(&MasterSecret([0x02u8; 32]), &crs.usernames());
 
         let c1 = crs.commit_master_identity(&nuls1, &blinding).unwrap();
         let c2 = crs.commit_master_identity(&nuls2, &blinding).unwrap();
@@ -472,7 +472,7 @@ mod tests {
     fn commitment_is_33_bytes() {
         let crs = Crs::setup(make_providers(2));
         let secret = MasterSecret([0x42u8; 32]);
-        let nullifiers = derive_all_nullifiers(&secret, &crs.service_names());
+        let nullifiers = derive_all_nullifiers(&secret, &crs.usernames());
         let blinding = BlindingKey([0x07u8; 32]);
         let c = crs.commit_master_identity(&nullifiers, &blinding).unwrap();
         assert_eq!(c.as_bytes().len(), 33);
@@ -497,7 +497,7 @@ mod tests {
             let h1: [u8; 33] = crs.generators[i].to_affine().to_bytes().into();
             let h2: [u8; 33] = crs2.generators[i].to_affine().to_bytes().into();
             assert_eq!(h1, h2);
-            assert_eq!(crs.providers[i].name, crs2.providers[i].name);
+            assert_eq!(crs.providers[i].username, crs2.providers[i].username);
             assert_eq!(crs.providers[i].origin, crs2.providers[i].origin);
             assert_eq!(
                 crs.providers[i].credential_generator,
@@ -528,7 +528,7 @@ mod tests {
         let blinding = BlindingKey([0xBB; 32]);
 
         // Derive all nullifiers
-        let names = crs.service_names();
+        let names = crs.usernames();
         let nullifiers = derive_all_nullifiers(&master_secret, &names);
         assert_eq!(nullifiers.len(), 4);
 

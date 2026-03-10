@@ -158,7 +158,7 @@ mod tests {
 
         let providers: Vec<ServiceProvider> = (0..2)
             .map(|i| ServiceProvider {
-                name: Name::new(format!("svc-{i}")),
+                username: Name::new(format!("svc-{i}")),
                 credential_generator: [0x02; 33],
                 origin: format!("https://svc-{i}.com"),
             })
@@ -170,7 +170,7 @@ mod tests {
         for seed in 1..=4u8 {
             let secret = MasterSecret([seed; 32]);
             let blinding = BlindingKey([seed.wrapping_add(100); 32]);
-            let nullifiers = derive_all_nullifiers(&secret, &crs.service_names());
+            let nullifiers = derive_all_nullifiers(&secret, &crs.usernames());
             let phi = crs.commit_master_identity(&nullifiers, &blinding).unwrap();
             set.push(phi);
         }

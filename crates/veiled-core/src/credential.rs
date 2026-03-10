@@ -18,9 +18,12 @@
 //! determine own index j
 //! ```
 
+use hkdf::Hkdf;
+use sha2::Sha256;
+
 use crate::crs::Crs;
 use crate::nullifier_v2::{derive_all_nullifiers, derive_nullifier, derive_public_nullifier};
-use crate::types::{BlindingKey, ChildRandomness, Commitment, MasterSecret, Nullifier};
+use crate::types::{BlindingKey, ChildRandomness, Commitment, MasterSecret, Name, Nullifier};
 
 /// The master credential tuple `(Φ, sk, r, k)`.
 ///
@@ -50,7 +53,7 @@ impl MasterCredential {
     /// The caller is responsible for generating `sk`, `r`, `k` from a
     /// cryptographically secure random source.
     pub fn create(crs: &Crs, sk: MasterSecret, r: ChildRandomness, k: BlindingKey) -> Self {
-        let names = crs.service_names();
+        let names = crs.usernames();
         let nullifiers = derive_all_nullifiers(&sk, &names);
         let phi = crs
             .commit_master_identity(&nullifiers, &k)
@@ -63,21 +66,40 @@ impl MasterCredential {
     /// `s_l = HKDF(sk, v_l)` — the raw 32-byte scalar used in the commitment.
     pub fn nullifier_scalar(&self, crs: &Crs, l: usize) -> Nullifier {
         assert!(l >= 1 && l <= crs.num_providers(), "provider index out of range");
-        derive_nullifier(&self.sk, &crs.providers[l - 1].name)
+        derive_nullifier(&self.sk, &crs.providers[l - 1].username)
     }
 
     /// Derive ALL L nullifier scalars.
     pub fn all_nullifier_scalars(&self, crs: &Crs) -> Vec<Nullifier> {
-        derive_all_nullifiers(&self.sk, &crs.service_names())
+        derive_all_nullifiers(&self.sk, &crs.usernames())
     }
 
     /// Derive the public nullifier `nul_l = s_l · g` for service at index `l` (1-indexed).
     ///
     /// Returns a 33-byte compressed secp256k1 point.
+    /// Uses the CRS base generator `g` (not the standard secp256k1 generator).
     /// This serves as both a Sybil-resistance token and a public authentication key.
     pub fn public_nullifier(&self, crs: &Crs, l: usize) -> [u8; 33] {
         assert!(l >= 1 && l <= crs.num_providers(), "provider index out of range");
-        derive_public_nullifier(&self.sk, &crs.providers[l - 1].name)
+        derive_public_nullifier(&self.sk, &crs.providers[l - 1].username, &crs.g)
+    }
+
+    /// Create a master credential with username-derived child randomness (Phase 1).
+    ///
+    /// `r = HKDF(IKM=real_randomness, salt=sha256(username), info="CRS-ASC-child-randomness")`
+    ///
+    /// This binds the child credential randomness to the user's own username,
+    /// so that service-specific auth keys are deterministic given the same
+    /// real randomness and username.
+    pub fn create_with_username(
+        crs: &Crs,
+        sk: MasterSecret,
+        real_randomness: &[u8; 32],
+        username: &Name,
+        k: BlindingKey,
+    ) -> Self {
+        let r = derive_child_randomness(real_randomness, username);
+        Self::create(crs, sk, r, k)
     }
 
     /// Recompute `Φ` from the stored secrets and the CRS.
@@ -85,11 +107,29 @@ impl MasterCredential {
     /// The user only needs to store `(sk, r, k)` — Φ can always be
     /// recomputed since `Φ = k·g + Σ s_l·h_l` and `s_l = HKDF(sk, v_l)`.
     pub fn recompute_phi(&self, crs: &Crs) -> Commitment {
-        let names = crs.service_names();
+        let names = crs.usernames();
         let nullifiers = derive_all_nullifiers(&self.sk, &names);
         crs.commit_master_identity(&nullifiers, &self.k)
             .expect("nullifier count matches CRS providers")
     }
+}
+
+/// Derive child credential randomness from real randomness and a username.
+///
+/// ```text
+/// r = HKDF(IKM = real_randomness, salt = sha256(username), info = "CRS-ASC-child-randomness")
+/// ```
+///
+/// This combines the user's true randomness with their username so that
+/// child credentials are deterministic for a given (randomness, username) pair.
+pub fn derive_child_randomness(real_randomness: &[u8; 32], username: &Name) -> ChildRandomness {
+    use sha2::Digest;
+    let username_hash = Sha256::digest(username.as_str().as_bytes());
+    let hk = Hkdf::<Sha256>::new(Some(&username_hash), real_randomness);
+    let mut output = [0u8; 32];
+    hk.expand(b"CRS-ASC-child-randomness", &mut output)
+        .expect("32 bytes is valid for HKDF-SHA256");
+    ChildRandomness(output)
 }
 
 /// A registered master credential — the user's full state after Phase 2.
@@ -142,6 +182,96 @@ impl RegisteredIdentity {
     pub fn set_size(&self) -> usize {
         self.anonymity_set.len()
     }
+
+    /// Register for a specific service provider (Phase 3).
+    ///
+    /// Generates the full service registration message:
+    /// ```text
+    /// (ϕ, nul_l, s_l, π, d̂)
+    /// ```
+    ///
+    /// - `service_index`: 1-indexed service provider in the CRS.
+    ///
+    /// Returns a `ServiceRegistration` containing the pseudonym, public
+    /// nullifier, revealed nullifier scalar, and the adapted Bootle proof.
+    pub fn register_for_service(
+        &self,
+        crs: &Crs,
+        service_index: usize,
+    ) -> Result<ServiceRegistration, &'static str> {
+        use crate::child_credential::derive_pseudonym;
+        use crate::service_proof::prove_service_registration;
+
+        if service_index < 1 || service_index > crs.num_providers() {
+            return Err("service_index out of range");
+        }
+
+        let username = &crs.providers[service_index - 1].username;
+        let pseudonym = derive_pseudonym(&self.credential.r, username, &crs.g);
+        let pub_nul = self.credential.public_nullifier(crs, service_index);
+        let all_nullifiers = self.credential.all_nullifier_scalars(crs);
+
+        let proof = prove_service_registration(
+            crs,
+            &self.anonymity_set,
+            self.index,
+            service_index,
+            self.set_id,
+            &self.credential.k.0,
+            &all_nullifiers,
+            &pseudonym,
+            &pub_nul,
+        )?;
+
+        Ok(ServiceRegistration {
+            pseudonym,
+            public_nullifier: pub_nul,
+            nullifier_scalar: all_nullifiers[service_index - 1],
+            set_id: self.set_id,
+            service_index,
+            proof,
+        })
+    }
+}
+
+/// The message sent from a prover to a service provider during Phase 3.
+///
+/// ```text
+/// (ϕ, nul_l, s_l, π, d̂)
+/// ```
+pub struct ServiceRegistration {
+    /// Pseudonym `ϕ = csk_l · g` — the user's public identity at this service.
+    pub pseudonym: [u8; 33],
+    /// Public nullifier `nul_l = s_l · g` — Sybil resistance token.
+    pub public_nullifier: [u8; 33],
+    /// Revealed nullifier scalar `s_l` — needed by verifier to compute shifted set.
+    pub nullifier_scalar: Nullifier,
+    /// `d̂` — which anonymity set the user is in.
+    pub set_id: u64,
+    /// Which service this registration is for (1-indexed).
+    pub service_index: usize,
+    /// The adapted Bootle/Groth membership proof over shifted commitments.
+    pub proof: crate::service_proof::ServiceRegistrationProof,
+}
+
+/// Verify a complete service registration message.
+///
+/// The verifier needs the CRS and the frozen anonymity set `Λ_{d̂}`.
+pub fn verify_service_registration_message(
+    crs: &Crs,
+    anonymity_set: &[Commitment],
+    reg: &ServiceRegistration,
+) -> bool {
+    crate::service_proof::verify_service_registration(
+        crs,
+        anonymity_set,
+        reg.service_index,
+        reg.set_id,
+        &reg.nullifier_scalar,
+        &reg.pseudonym,
+        &reg.public_nullifier,
+        &reg.proof,
+    )
 }
 
 #[cfg(test)]
@@ -151,11 +281,11 @@ mod tests {
     use crate::nullifier_v2::derive_all_public_nullifiers;
     use crate::types::Name;
 
-    fn make_provider(name: &str) -> ServiceProvider {
+    fn make_provider(username: &str) -> ServiceProvider {
         ServiceProvider {
-            name: Name::new(name),
+            username: Name::new(username),
             credential_generator: [0x02; 33],
-            origin: format!("https://{name}"),
+            origin: format!("https://{username}"),
         }
     }
 
@@ -202,7 +332,7 @@ mod tests {
     fn nullifier_scalar_matches_derive() {
         let crs = make_crs(3);
         let cred = make_credential(&crs, 0x42);
-        let names = crs.service_names();
+        let names = crs.usernames();
         for l in 1..=3 {
             let from_cred = cred.nullifier_scalar(&crs, l);
             let from_derive = derive_nullifier(&cred.sk, &names[l - 1]);
@@ -222,10 +352,10 @@ mod tests {
     fn public_nullifier_matches_derive() {
         let crs = make_crs(3);
         let cred = make_credential(&crs, 0x42);
-        let names = crs.service_names();
+        let names = crs.usernames();
         for l in 1..=3 {
             let from_cred = cred.public_nullifier(&crs, l);
-            let from_derive = derive_public_nullifier(&cred.sk, &names[l - 1]);
+            let from_derive = derive_public_nullifier(&cred.sk, &names[l - 1], &crs.g);
             assert_eq!(from_cred, from_derive);
         }
     }
@@ -307,8 +437,8 @@ mod tests {
         assert_eq!(unique.len(), 4);
 
         // Verify public nullifiers are valid points
-        let names = crs.service_names();
-        let pub_nuls = derive_all_public_nullifiers(&my_cred.sk, &names);
+        let names = crs.usernames();
+        let pub_nuls = derive_all_public_nullifiers(&my_cred.sk, &names, &crs.g);
         for pn in &pub_nuls {
             assert!(pn[0] == 0x02 || pn[0] == 0x03);
         }
@@ -333,5 +463,61 @@ mod tests {
 
         // Verify the commitment at our index matches
         assert_eq!(reg.anonymity_set[reg.index], reg.credential.phi);
+    }
+
+    // ── Phase 3 tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn full_phase_3_service_registration_flow() {
+        // Phase 0: CRS with 3 service providers (usernames)
+        let crs = make_crs(3);
+
+        // Phase 1: Create master credential
+        let my_cred = make_credential(&crs, 0xBB);
+
+        // Phase 2: Build anonymity set (1024 members for vtxo-tree)
+        // Use unique two-byte secrets to avoid collisions with my_cred (seed 0xBB)
+        let mut anonymity_set = Vec::new();
+        for i in 0..1023u16 {
+            let sk = MasterSecret([(i >> 8) as u8; 32]);
+            let r = ChildRandomness([(i & 0xFF) as u8; 32]);
+            let k = BlindingKey([((i.wrapping_add(7)) & 0xFF) as u8; 32]);
+            let cred = MasterCredential::create(&crs, sk, r, k);
+            anonymity_set.push(cred.phi);
+        }
+        // Insert our credential at position 500
+        anonymity_set.insert(500, my_cred.phi);
+        assert_eq!(anonymity_set.len(), 1024);
+
+        let reg_id = RegisteredIdentity::new(my_cred, 42, anonymity_set.clone()).unwrap();
+        assert_eq!(reg_id.set_id, 42);
+
+        // Phase 3: Register for service 2 (1-indexed)
+        let service_reg = reg_id.register_for_service(&crs, 2).unwrap();
+
+        // Check message fields
+        assert_eq!(service_reg.service_index, 2);
+        assert_eq!(service_reg.set_id, 42);
+        assert!(service_reg.pseudonym[0] == 0x02 || service_reg.pseudonym[0] == 0x03);
+        assert!(service_reg.public_nullifier[0] == 0x02 || service_reg.public_nullifier[0] == 0x03);
+
+        // Verify the registration message
+        assert!(verify_service_registration_message(&crs, &anonymity_set, &service_reg));
+
+        // Cross-service replay: proof for service 2 must fail at service 1
+        let mut replayed = ServiceRegistration {
+            pseudonym: service_reg.pseudonym,
+            public_nullifier: service_reg.public_nullifier,
+            nullifier_scalar: service_reg.nullifier_scalar,
+            set_id: service_reg.set_id,
+            service_index: 1, // wrong service
+            proof: service_reg.proof.clone(),
+        };
+        assert!(!verify_service_registration_message(&crs, &anonymity_set, &replayed));
+
+        // Wrong set_id must also fail
+        replayed.service_index = 2;
+        replayed.set_id = 999;
+        assert!(!verify_service_registration_message(&crs, &anonymity_set, &replayed));
     }
 }

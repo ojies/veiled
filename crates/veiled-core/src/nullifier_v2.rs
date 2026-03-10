@@ -1,11 +1,11 @@
 //! Per-verifier nullifier derivation using HKDF (RFC 5869).
 //!
 //! In the ASC protocol, each master identity produces L different nullifiers
-//! (one per service provider) via HKDF with the service name as salt.
+//! (one per service provider / username) via HKDF with the username as salt.
 //! This ensures:
-//! - Same master secret + different service → different unlinkable nullifiers
-//! - Different master secrets + same service → different nullifiers
-//! - Deterministic: same (master_secret, service_name) always gives the same nullifier
+//! - Same master secret + different username → different unlinkable nullifiers
+//! - Different master secrets + same username → different nullifiers
+//! - Deterministic: same (master_secret, username) always gives the same nullifier
 
 use hkdf::Hkdf;
 use k256::{
@@ -17,18 +17,18 @@ use sha2::Sha256;
 
 use crate::types::{MasterSecret, Name, Nullifier};
 
-/// Derive a nullifier for a specific service provider.
+/// Derive a nullifier for a specific service provider (username).
 ///
 /// Uses HKDF-SHA256:
-/// - Extract: `PRK = HKDF-Extract(salt = service_name, IKM = master_secret)`
+/// - Extract: `PRK = HKDF-Extract(salt = username, IKM = master_secret)`
 /// - Expand:  `nullifier = HKDF-Expand(PRK, info = "CRS-ASC-nullifier", len = 32)`
 ///
-/// The service name `v_l` acts as the HKDF salt, binding each nullifier
+/// The username `v_l` acts as the HKDF salt, binding each nullifier
 /// to a specific service provider. This is the per-verifier nullifier
 /// derivation from the ASC specification.
-pub fn derive_nullifier(master_secret: &MasterSecret, service_name: &Name) -> Nullifier {
+pub fn derive_nullifier(master_secret: &MasterSecret, username: &Name) -> Nullifier {
     let hk = Hkdf::<Sha256>::new(
-        Some(service_name.as_str().as_bytes()), // salt = v_l
+        Some(username.as_str().as_bytes()), // salt = v_l
         &master_secret.0,                        // IKM = master secret
     );
     let mut output = [0u8; 32];
@@ -37,15 +37,15 @@ pub fn derive_nullifier(master_secret: &MasterSecret, service_name: &Name) -> Nu
     Nullifier(output)
 }
 
-/// Derive ALL L nullifiers for a master secret given a list of service names.
+/// Derive ALL L nullifiers for a master secret given a list of usernames.
 ///
-/// Returns a `Vec<Nullifier>` of length `service_names.len()`, where
-/// `result[i]` is the nullifier for `service_names[i]`.
+/// Returns a `Vec<Nullifier>` of length `usernames.len()`, where
+/// `result[i]` is the nullifier for `usernames[i]`.
 pub fn derive_all_nullifiers(
     master_secret: &MasterSecret,
-    service_names: &[Name],
+    usernames: &[Name],
 ) -> Vec<Nullifier> {
-    service_names
+    usernames
         .iter()
         .map(|name| derive_nullifier(master_secret, name))
         .collect()
@@ -62,37 +62,56 @@ fn bytes_to_scalar(b: &[u8; 32]) -> Scalar {
 /// Compute the public nullifier `nul_l = s_l · g` (a group element).
 ///
 /// Where `s_l = HKDF(sk, v_l)` is the raw scalar derived by [`derive_nullifier`].
+/// The `g` parameter MUST be the CRS base generator — using the standard
+/// secp256k1 generator would break the commitment scheme.
+///
 /// The public nullifier serves double duty:
 /// - A **Sybil-resistance token** (unique per master identity per service)
 /// - A **public authentication key** (the user can prove knowledge of s_l)
 ///
 /// Returns a 33-byte compressed secp256k1 point.
-pub fn derive_public_nullifier(master_secret: &MasterSecret, service_name: &Name) -> [u8; 33] {
-    let nul = derive_nullifier(master_secret, service_name);
+pub fn derive_public_nullifier(
+    master_secret: &MasterSecret,
+    username: &Name,
+    g: &ProjectivePoint,
+) -> [u8; 33] {
+    let nul = derive_nullifier(master_secret, username);
     let s = bytes_to_scalar(&nul.0);
-    let point = ProjectivePoint::GENERATOR * s;
+    let point = *g * s;
     point.to_affine().to_bytes().into()
 }
 
 /// Derive ALL L public nullifiers as compressed 33-byte points.
 ///
-/// `result[i]` = `s_i · g` where `s_i = HKDF(sk, service_names[i])`.
+/// `result[i]` = `s_i · g` where `s_i = HKDF(sk, usernames[i])`.
+/// Uses the CRS base generator `g`.
 pub fn derive_all_public_nullifiers(
     master_secret: &MasterSecret,
-    service_names: &[Name],
+    usernames: &[Name],
+    g: &ProjectivePoint,
 ) -> Vec<[u8; 33]> {
-    service_names
+    usernames
         .iter()
-        .map(|name| derive_public_nullifier(master_secret, name))
+        .map(|name| derive_public_nullifier(master_secret, name, g))
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k256::{Secp256k1, elliptic_curve::hash2curve::{ExpandMsgXmd, GroupDigest}};
 
     fn sample_secret() -> MasterSecret {
         MasterSecret([0x42u8; 32])
+    }
+
+    /// CRS base generator g for tests.
+    fn crs_g() -> ProjectivePoint {
+        Secp256k1::hash_from_bytes::<ExpandMsgXmd<sha2::Sha256>>(
+            &[b"CRS-ASC-generator-0"],
+            &[b"CRS-ASC-v1"],
+        )
+        .expect("hash_to_curve never fails")
     }
 
     #[test]
@@ -163,7 +182,8 @@ mod tests {
 
     #[test]
     fn public_nullifier_is_33_bytes() {
-        let pn = derive_public_nullifier(&sample_secret(), &Name::new("twitter.com"));
+        let g = crs_g();
+        let pn = derive_public_nullifier(&sample_secret(), &Name::new("twitter.com"), &g);
         assert_eq!(pn.len(), 33);
         assert!(pn[0] == 0x02 || pn[0] == 0x03, "must be valid SEC1 compressed");
     }
@@ -172,27 +192,30 @@ mod tests {
     fn public_nullifier_deterministic() {
         let s = sample_secret();
         let n = Name::new("twitter.com");
+        let g = crs_g();
         assert_eq!(
-            derive_public_nullifier(&s, &n),
-            derive_public_nullifier(&s, &n)
+            derive_public_nullifier(&s, &n, &g),
+            derive_public_nullifier(&s, &n, &g)
         );
     }
 
     #[test]
     fn different_services_give_different_public_nullifiers() {
         let s = sample_secret();
-        let pn1 = derive_public_nullifier(&s, &Name::new("twitter.com"));
-        let pn2 = derive_public_nullifier(&s, &Name::new("github.com"));
+        let g = crs_g();
+        let pn1 = derive_public_nullifier(&s, &Name::new("twitter.com"), &g);
+        let pn2 = derive_public_nullifier(&s, &Name::new("github.com"), &g);
         assert_ne!(pn1, pn2);
     }
 
     #[test]
     fn public_nullifiers_all_unique() {
         let s = sample_secret();
+        let g = crs_g();
         let names: Vec<Name> = (0..10)
             .map(|i| Name::new(format!("service-{i}")))
             .collect();
-        let pns = derive_all_public_nullifiers(&s, &names);
+        let pns = derive_all_public_nullifiers(&s, &names, &g);
         assert_eq!(pns.len(), 10);
         let unique: std::collections::HashSet<_> = pns.iter().map(|p| *p).collect();
         assert_eq!(unique.len(), 10);
@@ -201,9 +224,10 @@ mod tests {
     #[test]
     fn derive_all_public_matches_individual() {
         let s = sample_secret();
+        let g = crs_g();
         let names = vec![Name::new("a"), Name::new("b")];
-        let all = derive_all_public_nullifiers(&s, &names);
-        assert_eq!(all[0], derive_public_nullifier(&s, &names[0]));
-        assert_eq!(all[1], derive_public_nullifier(&s, &names[1]));
+        let all = derive_all_public_nullifiers(&s, &names, &g);
+        assert_eq!(all[0], derive_public_nullifier(&s, &names[0], &g));
+        assert_eq!(all[1], derive_public_nullifier(&s, &names[1], &g));
     }
 }
