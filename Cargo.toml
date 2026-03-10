@@ -3,5 +3,6 @@ members = [
     "crates/veiled-core",
     "crates/veiled-registry",
     "crates/veiled-cli",
+    "crates/vtxo-tree",
 ]
 resolver = "2"
