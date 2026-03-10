@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/veiled-core",
+    "crates/veiled-registry",
+    "crates/veiled-cli",
+]
+resolver = "2"
