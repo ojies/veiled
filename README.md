@@ -1,7 +1,7 @@
 # Veiled
 
 An anonymous credential registry in Rust, inspired by the
-[Anonymous Self-Credentials (ASC)](https://eprint.iacr.org/2025/anonymous-credentials) paper.
+[Anonymous Self-Credentials (ASC)](https://eprint.iacr.org/2025/618.pdf) paper.
 
 Users register a commitment to their identity on a public registry without
 revealing who they are.  Service providers can verify that a user is a unique,
@@ -10,6 +10,8 @@ across different services.
 
 See [SCENARIO.md](SCENARIO.md) for a concrete end-to-end walkthrough (Bob
 verifies Alice's identity before sending her money).
+See [ASC_COMPARISON.md](ASC_COMPARISON.md) for a detailed comparison between
+veiled's implementation and the ASC paper protocol.
 
 ---
 
