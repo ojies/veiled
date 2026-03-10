@@ -142,6 +142,31 @@ impl Db {
         )?;
         Ok(())
     }
+
+    /// Persist a master identity registration with multiple nullifiers.
+    ///
+    /// This is the persistence counterpart of `RegistryStore::register_identity`.
+    /// All nullifiers are inserted in a single transaction for atomicity.
+    pub fn persist_identity_registration(
+        &self,
+        set_id: u64,
+        idx: usize,
+        commitment: &Commitment,
+        nullifiers: &[Nullifier],
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO commitments (set_id, idx, commitment) VALUES (?1, ?2, ?3)",
+            params![set_id as i64, idx as i64, commitment.as_bytes()],
+        )?;
+        for nul in nullifiers {
+            conn.execute(
+                "INSERT INTO nullifiers (nullifier) VALUES (?1)",
+                params![nul.as_bytes()],
+            )?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -177,6 +202,27 @@ mod tests {
         let store = db.load_store(4).unwrap();
         assert_eq!(store.sets[0].commitments.len(), 1);
         assert!(store.nullifiers.contains(&nullifier));
+    }
+
+    #[test]
+    fn persist_identity_with_multiple_nullifiers() {
+        let db = open_memory_db();
+        let _ = db.load_store(4).unwrap();
+
+        let commitment = Commitment([0xCC; 33]);
+        let nullifiers = vec![
+            Nullifier([0x01; 32]),
+            Nullifier([0x02; 32]),
+            Nullifier([0x03; 32]),
+        ];
+        db.persist_identity_registration(0, 0, &commitment, &nullifiers).unwrap();
+
+        let store = db.load_store(4).unwrap();
+        assert_eq!(store.sets[0].commitments.len(), 1);
+        assert_eq!(store.nullifiers.len(), 3);
+        assert!(store.nullifiers.contains(&Nullifier([0x01; 32])));
+        assert!(store.nullifiers.contains(&Nullifier([0x02; 32])));
+        assert!(store.nullifiers.contains(&Nullifier([0x03; 32])));
     }
 
     #[test]

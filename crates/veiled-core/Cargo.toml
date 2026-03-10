@@ -9,3 +9,4 @@ hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 k256 = { version = "0.13", features = ["arithmetic", "hash2curve"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
+hkdf = "0.12"

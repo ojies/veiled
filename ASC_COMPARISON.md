@@ -1,9 +1,8 @@
 # veiled vs. ASC — Design Comparison
 
-This document compares veiled's implementation against the protocol described
-in the Anonymous Self-Credentials (ASC) paper.  It explains where the two
-designs converge, where they diverge, and why some of those divergences are
-intentional.
+This document compares veiled's CRS-ASC implementation against the protocol
+described in the Anonymous Self-Credentials (ASC) paper. It explains where the
+two designs converge, where they diverge, and why.
 
 ---
 
@@ -11,40 +10,41 @@ intentional.
 
 The ASC paper describes a protocol with the following roles and properties:
 
-- **Prover** — holds a *master credential*: a pair `(master_identity, master_secret_key)`.
-- **Verifier** — identified by a unique *verifier identifier*.
-- **Anonymity set** — the publicly available set of all master identities.
+- **Prover** — holds a *master credential*: `(Φ, sk, r, k)`.
+- **Verifier** — identified by a unique *service name* `v_l` registered in the CRS.
+- **Anonymity set** — the publicly available set of all master identities `Λ = [Φ_1, ..., Φ_N]`.
+- **CRS** — Common Reference String: `(g, h_1..h_L, v_1..v_L, G_auth_1..G_auth_L)`.
 
-When a prover wants to register with a verifier she:
+When a prover wants to authenticate with a verifier:
 
-1. Generates a **pseudonym** (distinct from her master identity).
-2. Sends the pseudonym and a **zero-knowledge proof** asserting she owns one
-   of the master identities in the anonymity set — without revealing which one.
-3. Derives a **nullifier** = `f(master_identity, verifier_identifier)`.
-   The nullifier is unique per `(prover, verifier)` pair.
-4. The verifier checks its own local nullifier list and accepts the pseudonym
-   only if the nullifier has not been seen before, then adds it to the list.
+1. The CRS defines L+1 independent generators and L service providers.
+2. The prover derives L per-service nullifiers via `s_l = HKDF(sk, v_l)`.
+3. The master identity `Φ = k·g + s_1·h_1 + ... + s_L·h_L` is a multi-value Pedersen commitment.
+4. The prover proves membership in the anonymity set via a zero-knowledge proof.
+5. Each verifier sees a different nullifier `nul_l = s_l · g` — unlinkability is automatic.
 
 Key properties the paper achieves:
-- **Sybil resistance** — one pseudonym per verifier per master identity.
-- **Automatic cross-verifier unlinkability** — different verifiers derive
-  different nullifiers from the same master identity; they cannot collude to
-  link a prover across services.
-- **Pseudonym privacy** — verifiers learn pseudonyms, not master identities.
-- **Single composite proof** — membership + nullifier authenticity are bundled
-  into one message.
+- **Sybil resistance** — one nullifier per service per master identity.
+- **Automatic cross-service unlinkability** — different services derive different nullifiers from the same master identity; they cannot collude to link a prover.
+- **Multi-value commitment** — L nullifier values committed under a single blinding key.
+- **Bitcoin-native** — anchored on Bitcoin via vtxo-trees, not Ethereum smart contracts.
 
 ---
 
 ## What veiled shares with ASC
 
-| Concept | Shared |
+| Concept | Implementation |
 |---|---|
-| Nullifier-based Sybil resistance | Both use a one-way tag to detect duplicate registrations |
-| Pedersen commitment on secp256k1 | Same `C = r·G + v·H` formula from the `crypto-dbpoe` reference implementation |
+| CRS with independent generators | `g, h_1..h_L` via HashToCurve with DST `"CRS-ASC-v1"` |
+| Multi-value Pedersen commitment | `Φ = k·g + s_1·h_1 + ... + s_L·h_L` |
+| HKDF per-verifier nullifier derivation | `s_l = HKDF(sk, salt=v_l, info="CRS-ASC-nullifier")` |
+| Public nullifiers as group elements | `nul_l = s_l · g` (33-byte compressed secp256k1 point) |
+| MasterCredential tuple | `(Φ, sk, r, k)` — user stores ~96 bytes |
+| RegisteredIdentity with frozen set | `(Φ_j, sk, r, k, d̂, Λ_{d̂})` |
+| Anonymity set of size 1024 | Same ring size (power of 2 for vtxo-tree) |
+| Automatic cross-service unlinkability | Same (sk, different v_l) → different nullifiers |
 | Bootle/Groth one-out-of-many proof | Same 2015 paper; M=10, N=1024, 878-byte proof |
-| Anonymity set of size 1024 | Same ring size |
-| Blinding key stays client-side | Neither the registry nor the verifier ever sees `r` |
+| Blinding key stays client-side | Neither the registry nor any verifier sees k |
 
 ---
 
@@ -52,189 +52,161 @@ Key properties the paper achieves:
 
 | Property | ASC (paper) | veiled (implementation) |
 |---|---|---|
-| Nullifier input | `f(master_identity, verifier_id)` | `SHA256(pub_key \|\| name)` |
-| Cross-verifier unlinkability | Automatic (protocol property) | Manual (use a different key pair per verifier) |
-| Sybil resistance enforcer | Each verifier (local list) | Central registry (global nullifier set) |
-| Pseudonym abstraction | Yes — verifier learns pseudonym, not master identity | No — prover sends `pub_key` directly to verifier |
-| Anonymity set contents | Public master identities | Pedersen commitments (identities are hidden) |
-| Proof composition | Single composite proof | Two-step: `/has` then `/verify` |
-| Proof binding | Bound to `(master_identity, verifier_id)` | Bound to `(nullifier, set_id)` only |
-| Replay prevention | Cryptographic (verifier_id in proof) | Operational (verifier must track accepted nullifiers) |
-| Registry dependency | Optional — set can be distributed statically | Required — provides set contents, nullifier checks |
+| Identity registry | Ethereum smart contract `IdR` | Bitcoin vtxo-tree + HTTP registry |
+| On-chain anchor | EVM transaction | P2TR leaf keys in pre-signed tx tree |
+| Registration fee | Gas fee | Bitcoin tx fee |
+| Set filling trigger | Smart contract event | Registry monitors set capacity |
+| Proof composition | Single composite proof | Two-step: `/has` then `/verify` (to be unified in Phase 3) |
+| Legacy single-nullifier mode | Not in paper | Kept for backward compatibility |
+| Registry dependency | Optional at verify time | Required (stores sets, runs verifier) |
 
 ---
 
-## Detailed differences
+## Detailed comparison
 
-### 1. Nullifier derivation
+### 1. Bitcoin vs. Ethereum identity registry
 
-**ASC:**
-```
-nullifier = f(master_identity, verifier_identifier)
-```
-The verifier contributes their own identifier to the derivation.  The same
-master identity produces a completely different nullifier for every verifier —
-unlinkability is baked into the formula.
+**ASC (paper):**
+The identity registry `IdR` is an Ethereum smart contract. Users call
+`addID(Φ)` to register, and the contract emits events when sets fill.
 
 **veiled:**
-```
-nullifier = SHA256(pub_key || name)
-```
-The prover chooses the `name`.  The verifier contributes nothing.  The same
-`(pub_key, name)` pair always yields the same nullifier regardless of who the
-verifier is.
+The identity registry is a combination of:
+- An HTTP API (`POST /api/v1/register-identity`) for registration
+- SQLite for persistence
+- Bitcoin vtxo-trees for on-chain anchoring of sealed sets
 
-**Consequence:** In ASC, cross-verifier unlinkability is a guaranteed protocol
-property — no action required from the prover.  In veiled it requires the prover
-to manually use a separate `(pub_key, blinding)` key pair per verifier
-relationship (see [SCENARIO.md — Multi-party unlinkability](SCENARIO.md)).
+Each sealed anonymity set of 1024 commitments is anchored on Bitcoin via a
+vtxo-tree. Since commitments are valid 33-byte compressed secp256k1 points,
+they map directly to P2TR leaf keys — no additional encoding needed.
+
+**Consequence:** veiled achieves the same on-chain anchoring guarantees as
+the ASC paper but on Bitcoin's UTXO model rather than Ethereum's account model.
 
 ---
 
-### 2. Where Sybil resistance lives
+### 2. Nullifier derivation — now matching the paper
 
-**ASC:**
-Each verifier maintains its own local nullifier list.  The verifier accepts a
-pseudonym only if the nullifier is not already in that list, then adds it.  No
-central registry is needed for Sybil resistance — every verifier is
+**ASC (paper):**
+```
+s_l = HKDF(sk, salt=v_l)
+nul_l = s_l · g
+```
+
+**veiled (current):**
+```
+s_l = HKDF-SHA256(IKM=sk, salt=v_l, info="CRS-ASC-nullifier")
+nul_l = s_l · g
+```
+
+This now matches the paper. The nullifier scalar `s_l` is derived via HKDF
+with the service name as salt, producing automatic cross-service unlinkability.
+The public nullifier `nul_l = s_l · g` is a group element serving as both
+a Sybil-resistance token and a public authentication key.
+
+**Note:** veiled also retains the legacy `SHA256(pub_key || name)` nullifier
+in `nullifier.rs` for backward compatibility with the original single-value
+commitment scheme.
+
+---
+
+### 3. Multi-value Pedersen commitment — matching the paper
+
+**ASC (paper):**
+```
+Φ = k·g + s_1·h_1 + ... + s_L·h_L
+```
+
+**veiled (current):**
+```
+Φ = k·g + s_1·h_1 + ... + s_L·h_L
+```
+
+Exact match. The CRS provides L+1 independent generators derived via
+HashToCurve. The commitment binds all L nullifier values under a single
+blinding key k. The user only needs to store (sk, r, k) — 96 bytes — since
+Φ can be recomputed from these values and the CRS.
+
+---
+
+### 4. Master credential and registered identity — matching the paper
+
+**ASC (paper):**
+```
+Phase 1: credential = (Φ, sk, r, k)
+Phase 2: registered = (Φ_j, sk, r, k, d̂, Λ_{d̂})
+```
+
+**veiled (current):**
+```
+MasterCredential { phi, sk, r, k }
+RegisteredIdentity { credential, set_id, index, anonymity_set }
+```
+
+Exact match. `MasterCredential::create()` performs Phase 1 locally.
+`RegisteredIdentity::new()` performs Phase 2 by finding the user's index j
+in the frozen anonymity set.
+
+---
+
+### 5. Atomic multi-nullifier registration
+
+**ASC (paper):**
+Registration submits Φ and all L nullifiers are checked.
+
+**veiled:**
+`POST /api/v1/register-identity` accepts the commitment and all L nullifiers.
+The check is atomic: if ANY nullifier has been seen before, the entire
+registration is rejected with 409 Conflict. No partial registrations.
+
+---
+
+### 6. Proof composition (current limitation)
+
+**ASC (paper):**
+The membership proof and nullifier-authenticity proof are combined into a
+single composite proof.
+
+**veiled (current):**
+The Bootle/Groth proof currently operates on the old single-value commitment
+scheme. Adapting it to prove membership for multi-value commitments is planned
+for Phase 3.
+
+---
+
+### 7. Where Sybil resistance lives
+
+**ASC (paper):**
+Each verifier maintains its own local nullifier list. The verifier is
 self-sovereign.
 
 **veiled:**
-The central registry maintains a global `nullifiers: HashSet<Nullifier>`.  At
-`POST /api/v1/register` it rejects any duplicate with **409 Conflict**.  The
-verifier (Bob) trusts the registry's `"present": true` response without doing
-any local duplicate checking.
-
-**Consequence:** veiled requires the verifier to trust the registry.  A
-compromised or colluding registry could silently allow duplicate registrations
-or deny legitimate ones.  In ASC the verifier's Sybil check cannot be
-subverted by any third party.
+The central registry maintains a global nullifier index. At registration time,
+all L nullifiers are checked. Additionally, each service provider can maintain
+its own local `nul_l = s_l · g` list for per-service Sybil resistance.
 
 ---
 
-### 3. Pseudonym abstraction
+## What veiled achieves from the ASC paper (Phases 0–2)
 
-**ASC:**
-The prover generates a **pseudonym** — a separate identity from her master
-credential — and presents it to the verifier along with the ZK proof.  The
-verifier learns only the pseudonym.
-
-**veiled:**
-There is no pseudonym layer.  The prover sends her actual `pub_key` (the master
-identity) directly to the verifier.  Bob knows exactly which master identity
-belongs to Alice.
-
-**Consequence:** This difference is **intentional** in the payment context.
-Bob needs to know who Alice is in order to send her money.  The stronger
-privacy guarantee of ASC (verifier never learns master identity) is not needed
-here — and adding a pseudonym layer would introduce complexity without benefit.
-For service-access use cases where the verifier should not learn the user's
-real identity, veiled would need to be extended with a pseudonym mechanism.
-
----
-
-### 4. Anonymity set contents
-
-**ASC:**
-The anonymity set contains the **public master identities** themselves.  The
-set is published openly; provers prove membership in this public set.
-
-**veiled:**
-The anonymity set contains **Pedersen commitments** (`r·G + v·H`), not the
-master identities.  The registry stores commitments, which cryptographically
-hide both the nullifier (the identity hash) and the blinding key.
-
-**Consequence:** veiled is actually *stronger* than ASC at the registry level.
-The registry never learns any master identity — only commitments that are
-computationally opaque without the blinding key.  In ASC, the registry (or
-anyone who sees the public set) knows every master identity.  This is a
-deliberate improvement over the paper model.
-
----
-
-### 5. Single composite proof vs. two-step protocol
-
-**ASC:**
-The membership proof and the nullifier-authenticity proof are combined into a
-**single composite proof** sent to the verifier in one message.
-
-**veiled:**
-The protocol is split across two HTTP endpoints:
-
-1. `POST /api/v1/has` — Bob checks that Alice is registered and retrieves
-   her nullifier.
-2. `POST /api/v1/verify` — Bob submits a ZK membership proof and Alice's
-   nullifier; the registry verifies the proof against the anonymity set.
-
-**Consequence:** An extra round-trip is required.  This is a pragmatic
-simplification: the registry acts as both the commitment store and the proof
-verifier, so the split naturally maps to "look up the nullifier, then verify
-the proof".  Combining both into one message would be a possible future
-optimisation but adds no security benefit in this deployment model.
-
----
-
-### 6. Proof binding and replay prevention
-
-**ASC:**
-The proof is bound to `(master_identity, verifier_identifier)`.  A proof
-generated for verifier Bob cannot be replayed to verifier John — the
-verifier_id in the proof hash would not match.
-
-**veiled:**
-The proof is bound to `(nullifier, set_id)` only.  The nullifier is
-`SHA256(pub_key || name)`, not tied to any verifier identifier.  The same
-proof can be verified by any party who has access to set `set_id`.
-
-**Consequence:** Replay prevention is an **operational responsibility** in
-veiled.  Bob must track which nullifiers he has already accepted and refuse
-to honour the same nullifier a second time.  See
-[SCENARIO.md — Replay](SCENARIO.md) for guidance.
-
----
-
-### 7. Registry dependency
-
-**ASC:**
-The registry's role is limited to the initial bootstrapping of the public
-master-identity set.  At proof time the verifier works locally — it holds the
-public set and its own nullifier list, and needs no live registry call.
-
-**veiled:**
-The registry is a required online service:
-- It stores all commitments and serves them to provers (`GET /api/v1/sets/:id`).
-- It provides the nullifier lookup (`POST /api/v1/has`).
-- It performs proof verification against the stored set (`POST /api/v1/verify`).
-- It enforces global Sybil resistance.
-
-**Consequence:** veiled has a stronger operational dependency on the registry.
-If the registry is unavailable, provers cannot register and verifiers cannot
-verify.  This is an acceptable trade-off in a centralised payment context but
-would need re-architecting for fully decentralised deployments.
-
----
-
-## Intentional departures from ASC
-
-Some differences are deliberate design choices, not omissions:
-
-| Departure | Reason |
+| Property | Status |
 |---|---|
-| No pseudonym layer | In a payment context Bob needs to know who Alice is — pseudonym privacy is not required |
-| Central registry for Sybil resistance | Simpler to operate; acceptable when the registry operator is trusted (e.g. a financial institution or a smart contract) |
-| Commitments in the anonymity set (not raw identities) | Strictly stronger than the paper — registry learns nothing about member identities |
-| Two-step protocol | Natural fit for the deployment model; composite proof adds complexity without security gain here |
-| `pub_key || name` nullifier | Allows a single master identity to have multiple independent relationships by changing the name; keeps the protocol simple without a separate verifier-identifier infrastructure |
+| CRS with independent generators via HashToCurve | Implemented |
+| Multi-value Pedersen commitment `Φ = k·g + Σ s_l·h_l` | Implemented |
+| HKDF per-verifier nullifier derivation | Implemented |
+| Public nullifiers `nul_l = s_l · g` | Implemented |
+| Automatic cross-service unlinkability | Implemented |
+| MasterCredential `(Φ, sk, r, k)` | Implemented |
+| RegisteredIdentity with frozen anonymity set | Implemented |
+| Multi-nullifier atomic registration | Implemented |
+| Bitcoin on-chain anchoring via vtxo-tree | Implemented |
+| Anonymity set capacity N=1024 | Implemented |
 
----
+## What remains (Phases 3+)
 
-## What veiled does NOT provide (vs. ASC)
-
-| Property | ASC | veiled |
-|---|---|---|
-| Automatic cross-verifier unlinkability | Yes — protocol property | No — manual key-per-relationship workaround |
-| Verifier-local Sybil resistance | Yes — verifier is self-sovereign | No — depends on central registry |
-| Pseudonym abstraction | Yes — verifier never sees master identity | No — prover sends `pub_key` directly |
-| Single composite proof | Yes | No — two separate endpoints |
-| Cryptographic replay prevention | Yes — verifier_id bound in proof | No — operational convention only |
-| Registry-free operation (at verify time) | Yes | No — registry must be online |
+| Property | Status |
+|---|---|
+| Bootle/Groth proof adapted for multi-value commitments | Planned (Phase 3) |
+| Service-specific credential derivation | Planned (Phase 3) |
+| Single composite proof (membership + nullifier authenticity) | Planned (Phase 3) |
+| Anonymous authentication protocol | Planned (Phase 4) |

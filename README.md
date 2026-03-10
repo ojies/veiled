@@ -1,152 +1,217 @@
 # Veiled
 
-An anonymous credential registry in Rust, inspired by the
-[Anonymous Self-Credentials (ASC)](annomymous-credential.pdf) paper.
+An anonymous credential system on **Bitcoin**, implementing the
+[Anonymous Self-Credentials (ASC)](annomymous-credential.pdf) protocol
+with a Common Reference String (CRS) and Bootle/Groth one-out-of-many proofs.
 
-Users register a commitment to their identity on a public registry without
-revealing who they are.  Service providers can verify that a user is a unique,
-legitimate member of an anonymity set — without being able to link that user
-across different services.
+Users generate a master credential locally and register a multi-value Pedersen
+commitment on a public identity registry backed by Bitcoin vtxo-trees.
+Service providers can verify that a user is a unique, legitimate member of an
+anonymity set — without being able to link that user across different services.
 
-See [SCENARIO.md](SCENARIO.md) for a concrete end-to-end walkthrough (Bob
-verifies Alice's identity before sending her money).
+See [SCENARIO.md](SCENARIO.md) for a concrete end-to-end walkthrough.
 See [ASC_COMPARISON.md](ASC_COMPARISON.md) for a detailed comparison between
 veiled's implementation and the ASC paper protocol.
 
 ---
 
-## Core idea
+## Protocol overview
+
+The CRS-ASC protocol has three phases:
+
+### Phase 0 — System Setup
+
+A trusted setup generates the Common Reference String (CRS):
 
 ```
-nullifier  = SHA256(pub_key || name)           # deterministic per (identity, name)
-commitment = r·G + v·H  on secp256k1          # Pedersen commitment, v = scalar(nullifier)
+crs = (G, q, g, h_1..h_L, v_1..v_L, G_auth_1..G_auth_L)
 ```
 
-> **Why secp256k1 Pedersen commitments?**  The scheme matches the
-> [crypto-dbpoe](https://github.com/BoquilaID/U2SSO/tree/main/crypto-dbpoe)
-> reference from the ASC paper.  Pedersen commitments are **homomorphic** —
-> a property required for the Bootle/Groth membership proof — and secp256k1
-> is the native curve of Bitcoin.
+- **G** = secp256k1, **q** = curve order
+- **g** = HashToCurve("CRS-ASC-generator-0") — base generator (NUMS)
+- **h_l** = HashToCurve("CRS-ASC-generator-{l}") for l = 1..L — per-provider generators
+- **v_l** = service provider name (string identifier, used as HKDF salt)
+- **G_auth_l** = credential generator for provider l
+- Identity Registry (IdR) initialized with N = 1024
 
-| Term | Meaning |
-|---|---|
-| **Public key** | 32-byte identity key owned by the user |
-| **Name** | Human-readable handle (username) |
-| **Nullifier** | `SHA256(pub_key ‖ name)` — deterministic per (identity, name); revealed on registration for Sybil resistance |
-| **Commitment** | `r·G + v·H` — 33-byte compressed secp256k1 point; hiding and binding; stored in the anonymity set |
-| **Blinding key** | Random 32-byte scalar `r`; keeps the nullifier hidden inside the commitment |
-| **Anonymity set** | Fixed-size batch of 1024 commitments; sealed sets are the accumulator for ZK membership proofs |
-| **Membership proof** | Bootle/Groth one-out-of-many proof — proves knowledge of one opening in the set without revealing which |
+All generators are derived via hash-to-curve with DST `"CRS-ASC-v1"`, ensuring
+they are provably independent (NUMS — Nothing Up My Sleeve).
+
+### Phase 1 — Master Credential Creation (local, offline)
+
+The user generates three secrets locally:
+
+```
+sk ←$ {0,1}^256     # root secret for nullifier derivation (MasterSecret)
+r  ←$ {0,1}^256     # child credential randomness (ChildRandomness)
+k  ←$ Z_q           # Pedersen blinding key (BlindingKey)
+```
+
+Then derives L nullifier scalars and computes the master identity:
+
+```
+for l = 1..L:
+  s_l = HKDF(sk, salt=v_l, info="CRS-ASC-nullifier")  # per-service nullifier scalar
+  nul_l = s_l · g                                       # public nullifier (group element)
+
+Φ = k·g + s_1·h_1 + ... + s_L·h_L                      # multi-value Pedersen commitment
+
+Master credential = (Φ, sk, r, k)                       # user stores ~96 bytes (sk, r, k)
+```
+
+### Phase 2 — Master Identity Registration (on-chain via Bitcoin)
+
+```
+send Φ to IdR (Bitcoin vtxo-tree, not Ethereum)
+wait for Λ_{d̂} to fill to N = 1024
+receive Λ_{d̂} = [Φ_1, ..., Φ_1024]
+determine own index j
+store (Φ_j, sk, r, k, d̂, Λ_{d̂})
+```
+
+The sealed anonymity set is anchored on Bitcoin via a vtxo-tree: each commitment
+(a 33-byte compressed secp256k1 point) becomes a P2TR leaf key directly.
 
 ---
 
-## Cryptographic primitives
+## Core cryptographic primitives
 
-### Nullifier — `SHA256(pub_key ‖ name)`
+### Multi-value Pedersen commitment
 
-The nullifier is a **deterministic**, **one-way** tag.  It is the only value
-sent to the registry alongside the commitment; this enables Sybil resistance
-(the server rejects a second registration for the same nullifier) without
-revealing the user's key or name.
+```
+Φ = k·g + s_1·h_1 + ... + s_L·h_L
+```
 
-### Pedersen commitment — `C = r·G + v·H`
-
-- **G** — standard secp256k1 generator
-- **H** — NUMS point: `hash_to_curve("veiled-H", dst="veiled-commitment-v1")`
-- **v** = `scalar(nullifier.bytes)` — the committed value
-- **r** = `scalar(blinding.bytes)` — the hiding factor
+Where `g, h_1..h_L` are L+1 independent generators from the CRS.
+The commitment hides L nullifier values under a single blinding key k.
 
 Properties:
-- **Hiding**: given only `C`, an adversary cannot determine `v` without knowing `r`
-- **Binding**: computationally infeasible to open `C` to a different `(v', r')` pair
-- **Homomorphic**: `C(v₁,r₁) + C(v₂,r₂) = C(v₁+v₂, r₁+r₂)`
+- **Hiding**: given only Φ, an adversary cannot determine any s_l without k
+- **Binding**: computationally infeasible to open Φ to different values
+- **Homomorphic**: required for the Bootle/Groth membership proof
+
+### HKDF per-verifier nullifier derivation
+
+```
+s_l = HKDF-SHA256(IKM = sk, salt = v_l, info = "CRS-ASC-nullifier")
+```
+
+Each master secret produces L different nullifiers (one per service provider).
+Same master secret + different service → different unlinkable nullifiers.
+This gives **automatic cross-service unlinkability** — a protocol property,
+not a manual workaround.
+
+### Public nullifier (group element)
+
+```
+nul_l = s_l · g
+```
+
+Serves double duty:
+- **Sybil-resistance token**: unique per (master identity, service provider)
+- **Public authentication key**: the user can prove knowledge of s_l
 
 ### One-out-of-many proof — Bootle/Groth 2015
 
 Proves in zero knowledge that the prover knows an index `l` and opening
-`(v, r)` such that `set[l] = r·G + v·H`, without revealing `l`.
+such that `set[l]` is their commitment, without revealing `l`.
 
-Parameters: **M = 10**, **N = 2^M = 1024** (ring size matches the anonymity set capacity).
+Parameters: **M = 10**, **N = 2^M = 1024** (ring size matches anonymity set capacity).
 
 Proof size: **878 bytes**.
+
+---
+
+## Terminology
+
+| Term | Meaning |
+|---|---|
+| **CRS** | Common Reference String — public parameters `(g, h_1..h_L, v_1..v_L)` |
+| **Master secret (sk)** | 32-byte root secret for HKDF nullifier derivation |
+| **Child randomness (r)** | 32-byte randomness for service-specific auth key derivation |
+| **Blinding key (k)** | 32-byte Pedersen blinding scalar |
+| **Nullifier scalar (s_l)** | `HKDF(sk, v_l)` — raw 32-byte scalar, one per service provider |
+| **Public nullifier (nul_l)** | `s_l · g` — 33-byte compressed secp256k1 point |
+| **Master identity (Φ)** | `k·g + Σ s_l·h_l` — 33-byte multi-value Pedersen commitment |
+| **Master credential** | Tuple `(Φ, sk, r, k)` — user stores locally |
+| **Registered identity** | `(Φ_j, sk, r, k, d̂, Λ_{d̂})` — includes frozen anonymity set and own index |
+| **Anonymity set (Λ)** | Fixed-size batch of 1024 commitments; sealed sets are the accumulator for ZK proofs |
+| **vtxo-tree** | Binary pre-signed transaction tree anchoring commitments on Bitcoin |
 
 ---
 
 ## Architectural flow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  User (veiled-cli)                                              │
-│                                                                 │
-│  1. Generate keys                                               │
-│     pub_key  ← random 32 bytes (identity)                      │
-│     blinding ← random 32 bytes (hiding factor r)               │
-│                                                                 │
-│  2. Derive credentials (LOCAL — never sent to server)           │
-│     nullifier  = SHA256(pub_key ‖ name)                        │
-│     commitment = scalar(nullifier)·H + scalar(blinding)·G      │
-│                                                                 │
-│  3. POST /api/v1/register  { commitment, nullifier }           │
-│                                                                 │
-│  4. prove (LOCAL — once the anonymity set is sealed)            │
-│     proof ← prove_membership(set, index, nullifier, blinding)  │
-└────────────────────────┬────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Phase 0: Trusted Setup                                          │
+│                                                                  │
+│  CRS = (g, h_1..h_L, v_1..v_L, G_auth_1..G_auth_L)            │
+│  g = HashToCurve("CRS-ASC-generator-0", DST="CRS-ASC-v1")      │
+│  h_l = HashToCurve("CRS-ASC-generator-{l}", DST="CRS-ASC-v1")  │
+│  IdR initialized with N = 1024                                   │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│  User (Phase 1 — local, offline)                                 │
+│                                                                  │
+│  1. Generate secrets: sk, r, k ←$ random                         │
+│  2. Derive nullifiers: s_l = HKDF(sk, v_l) for l = 1..L         │
+│  3. Compute Φ = k·g + s_1·h_1 + ... + s_L·h_L                  │
+│  4. Store (sk, r, k) securely (~96 bytes)                        │
+│                                                                  │
+│  5. POST /api/v1/register-identity { commitment: Φ, nullifiers } │
+│                                                                  │
+│  6. Wait for anonymity set Λ_{d̂} to fill to N=1024             │
+│  7. Determine own index j in Λ_{d̂}                              │
+│  8. Store (Φ_j, sk, r, k, d̂, Λ_{d̂})                           │
+└────────────────────────┬─────────────────────────────────────────┘
                          │  HTTP
                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Registry (veiled-registry)                                     │
-│                                                                 │
-│  register handler                                               │
-│  ├── Reject if nullifier ∈ nullifier_index  → 409 Conflict     │
-│  ├── Append commitment to current AnonymitySet                  │
-│  │   └── If set is full (1024) → seal it, open a new one       │
-│  ├── Insert nullifier into nullifier_index  (O(1) HashSet)     │
-│  └── Write-through to SQLite (commitments + nullifiers tables)  │
-│                                                                 │
-│  has handler  (POST /api/v1/has)                                │
-│  ├── Recompute nullifier = SHA256(pub_key ‖ name)              │
-│  └── Return { present: bool, nullifier }                        │
-│                                                                 │
-│  State layout                                                   │
-│  ┌─────────────────────────┐   ┌──────────────────────────┐    │
-│  │  RegistryStore (RAM)    │   │  veiled.db (SQLite)      │    │
-│  │  sets: Vec<AnonymitySet>│◄──│  anonymity_sets table    │    │
-│  │  nullifiers: HashSet    │◄──│  commitments table       │    │
-│  └─────────────────────────┘   │  nullifiers table        │    │
-│    live source of truth         └──────────────────────────┘    │
-│    (loaded from SQLite on boot, written on every mutation)      │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Registration flow (step by step)
-
-```
-Client                          Registry                     SQLite
-  │                                │                            │
-  │── POST /register ─────────────►│                            │
-  │   { commitment, nullifier }    │                            │
-  │                                ├─ nullifier ∈ index? ──────►│
-  │                                │  No → continue             │
-  │                                ├─ push(commitment, set)     │
-  │                                ├─ index.insert(nullifier)   │
-  │                                ├── INSERT commitments ──────►│
-  │                                ├── INSERT nullifiers ───────►│
-  │◄── 200 { set_id, index } ──────│                            │
+┌──────────────────────────────────────────────────────────────────┐
+│  Registry (veiled-registry)                                      │
+│                                                                  │
+│  register-identity handler                                       │
+│  ├── Check ALL L nullifiers for duplicates (atomic)              │
+│  ├── Append Φ to current AnonymitySet                            │
+│  │   └── If set is full (1024) → seal it, open a new one        │
+│  ├── Insert all nullifiers into index                            │
+│  └── Write-through to SQLite                                     │
+│                                                                  │
+│  On set seal: anchor on Bitcoin via vtxo-tree                    │
+│  ├── Each Φ (33-byte secp256k1 point) → P2TR leaf key           │
+│  └── Pre-signed binary transaction tree for 1024 leaves          │
+│                                                                  │
+│  State layout                                                    │
+│  ┌─────────────────────────┐   ┌──────────────────────────┐     │
+│  │  RegistryStore (RAM)    │   │  veiled.db (SQLite)      │     │
+│  │  sets: Vec<AnonymitySet>│◄──│  anonymity_sets table    │     │
+│  │  nullifiers: HashSet    │◄──│  commitments table       │     │
+│  └─────────────────────────┘   │  nullifiers table        │     │
+│    live source of truth         └──────────────────────────┘     │
+│    (loaded from SQLite on boot, written on every mutation)       │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Sybil resistance
 
-The nullifier is a deterministic function of `(pub_key, name)`.  A user cannot
-register the same `(pub_key, name)` pair twice — the server rejects the second
-attempt with **409 Conflict**.  Because the nullifier is a one-way hash, the
-server learns nothing about the user's public key or name from the commitment
-alone.
+Each master identity produces L nullifiers — one per service provider — via
+`s_l = HKDF(sk, v_l)`. At registration time, ALL L nullifiers are submitted
+and checked atomically. A user cannot register the same master secret twice
+(any duplicate nullifier triggers rejection with **409 Conflict**).
+
+Because nullifiers are derived via HKDF with the service name as salt,
+different services see different nullifiers from the same user — providing
+**automatic cross-service unlinkability** as a protocol property.
 
 ### Anonymity set sealing
 
 When an anonymity set reaches its capacity (**1024** commitments), it is
-sealed.  New registrations go into a fresh set.  Sealed sets are immutable and
+sealed. New registrations go into a fresh set. Sealed sets are immutable and
 serve as the accumulator for the Bootle/Groth membership proof.
+
+Sealed sets are anchored on Bitcoin via vtxo-trees: each commitment is a valid
+secp256k1 point and becomes a P2TR leaf key in the transaction tree.
 
 ---
 
@@ -164,27 +229,41 @@ veiled/
     │   │   └── membership_proof.rs   # full prove/verify over a 1024-element set
     │   └── src/
     │       ├── lib.rs                # public API re-exports
-    │       ├── nullifier.rs          # compute_nullifier(pub_key, name) → SHA256(key‖name)
-    │       ├── commitment.rs         # commit(nullifier, blinding) → r·G + v·H
+    │       ├── crs.rs                # CRS setup, multi-value Pedersen commitment, HashToCurve generators
+    │       ├── credential.rs         # MasterCredential (Phase 1) + RegisteredIdentity (Phase 2)
+    │       ├── nullifier_v2.rs       # HKDF per-verifier nullifier derivation + public nullifiers
+    │       ├── nullifier.rs          # legacy SHA256(pub_key || name) nullifier (backward compat)
+    │       ├── commitment.rs         # single-value Pedersen commit (used by Bootle/Groth proof)
     │       ├── proof.rs              # prove_membership / verify_membership (Bootle/Groth)
-    │       └── types.rs              # PublicKey, Nullifier, Commitment, BlindingKey, AnonymitySet
+    │       └── types.rs              # MasterSecret, ChildRandomness, BlindingKey, Nullifier, Commitment, Name, ...
     ├── veiled-registry/              # HTTP registry server with SQLite persistence
     │   ├── src/
-    │   │   ├── lib.rs                # public module re-exports (used by integration tests)
-    │   │   ├── db.rs                 # SQLite read/write (rusqlite, write-through)
+    │   │   ├── lib.rs
+    │   │   ├── main.rs               # entry point
+    │   │   ├── server.rs             # axum router + AppState
+    │   │   ├── db.rs                 # SQLite read/write (write-through)
     │   │   ├── store.rs              # in-memory state (anonymity sets + nullifier index)
     │   │   ├── error.rs              # AppError → HTTP responses
-    │   │   ├── server.rs             # axum router + AppState
-    │   │   ├── main.rs               # entry point
+    │   │   ├── bitcoin_anchor.rs     # vtxo-tree anchoring for sealed anonymity sets
     │   │   └── routes/
-    │   │       ├── register.rs       # POST /api/v1/register
+    │   │       ├── register.rs       # POST /api/v1/register + POST /api/v1/register-identity
     │   │       ├── has.rs            # POST /api/v1/has
-    │   │       └── sets.rs           # GET  /api/v1/sets[/:id]
+    │   │       ├── sets.rs           # GET  /api/v1/sets[/:id]
+    │   │       └── verify.rs         # POST /api/v1/verify
     │   └── tests/
-    │       └── api.rs                # HTTP integration tests (no server socket needed)
-    └── veiled-cli/                   # Command-line client
-        └── src/
-            └── main.rs               # generate-key, derive, register, has, sets, set, prove
+    │       └── api.rs                # HTTP integration tests
+    ├── veiled-cli/                   # Command-line client
+    │   └── src/
+    │       └── main.rs
+    └── vtxo-tree/                    # Bitcoin vtxo-tree (pre-signed tx tree for 1024 users)
+        ├── src/
+        │   ├── lib.rs
+        │   ├── tree.rs
+        │   ├── types.rs
+        │   └── tx.rs
+        └── tests/
+            ├── integration.rs
+            └── e2e.rs
 ```
 
 ---
@@ -208,83 +287,19 @@ State persists across restarts automatically.
 
 ---
 
-## CLI client
-
-All subcommands default to `http://localhost:7271`. Override with `--server <url>`.
-
-```bash
-# 1. Generate a fresh identity key + blinding key
-veiled generate-key
-# pub_key:  <64 hex chars>
-# blinding: <64 hex chars>
-
-# 2. Derive credentials locally — nothing sent to the server
-veiled derive \
-  --pub-key <64 hex chars> \
-  --name alice \
-  --blinding <64 hex chars>    # random if omitted
-# nullifier:  <64 hex chars>
-# commitment: <66 hex chars>   (33-byte compressed EC point)
-
-# 3. Register your identity with the registry
-veiled register \
-  --pub-key <64 hex chars> \
-  --name alice \
-  --blinding <64 hex chars>    # must match the blinding used in derive
-# registered → set_id=0, index=3
-
-# 4. Check if an identity is registered
-veiled has --pub-key <64 hex chars> --name alice
-# present:  true
-# nullifier: <64 hex chars>
-
-# 5. List all anonymity sets
-veiled sets
-# id     size   capacity   full
-# 0      4      1024       false
-
-# 6. Inspect a specific set (shows all commitments)
-veiled set --id 0
-
-# 7. Generate a zero-knowledge membership proof
-#    (fetches the set from the server, proves locally — ~2–5 s release build)
-veiled prove \
-  --pub-key  <64 hex chars> \
-  --name     alice \
-  --blinding <64 hex chars> \
-  --set-id   0 \
-  --index    3               # returned by `register`
-# proof (878 bytes):
-# <1756 hex chars>
-
-# 8. Save key material to a JSON keyfile
-veiled save-key \
-  --pub-key  <64 hex chars> \
-  --blinding <64 hex chars> \
-  --out      veiled-keys.json
-# keys saved to veiled-keys.json
-
-# 9. Load key material from a keyfile
-veiled load-key --file veiled-keys.json
-# pub_key:  <64 hex chars>
-# blinding: <64 hex chars>
-
-# Override the server URL
-veiled --server http://example.com:7271 sets
-```
-
----
-
 ## REST API
 
-### `POST /api/v1/register`
+### `POST /api/v1/register-identity` (ASC protocol)
 
-Register a commitment + nullifier pair.  Returns conflict if the nullifier
-has already been used (Sybil resistance).
+Register a master identity commitment with all L per-service-provider nullifiers.
+Returns conflict if ANY nullifier has already been registered (atomic check).
 
 **Request**
 ```json
-{ "commitment": "<66 hex>", "nullifier": "<64 hex>" }
+{
+  "commitment": "<66 hex chars>",
+  "nullifiers": ["<64 hex chars>", ...]
+}
 ```
 
 **Response 200**
@@ -299,10 +314,25 @@ has already been used (Sybil resistance).
 
 ---
 
+### `POST /api/v1/register` (legacy, single nullifier)
+
+Register a commitment + single nullifier pair. Kept for backward compatibility.
+
+**Request**
+```json
+{ "commitment": "<66 hex>", "nullifier": "<64 hex>" }
+```
+
+**Response 200**
+```json
+{ "set_id": 0, "index": 3 }
+```
+
+---
+
 ### `POST /api/v1/has`
 
-Check whether a `(pub_key, name)` pair is registered. The server recomputes
-`SHA256(pub_key || name)` and looks it up in its nullifier index.
+Check whether a `(pub_key, name)` pair is registered.
 
 **Request**
 ```json
@@ -352,10 +382,6 @@ Verify a 878-byte one-out-of-many membership proof server-side.
 { "valid": true }
 ```
 
-**Response 400** — bad hex or wrong proof length
-
-**Response 404** — set_id not found
-
 ---
 
 ## Examples
@@ -376,27 +402,32 @@ cargo run --example membership_proof -p veiled-core --release
 ## Testing
 
 ```bash
-cargo test                     # all tests across the workspace
-cargo test -p veiled-core      # 14 crypto primitive unit tests
-cargo test -p veiled-registry  # 6 unit tests + 9 HTTP integration tests
+cargo test                      # all tests across the workspace
+cargo test -p veiled-core       # 50 crypto primitive + protocol tests
+cargo test -p veiled-registry   # 27 unit + integration tests
 ```
 
 Test coverage:
-- **veiled-core**: nullifier determinism; Pedersen commitment properties (determinism, hiding, binding, SEC1 encoding); one-out-of-many proof correctness, tamper detection, wrong-nullifier rejection
-- **veiled-registry (unit)**: store registration, duplicate rejection, set rollover, DB persistence round-trips
-- **veiled-registry (integration)**: all 4 HTTP endpoints exercised via `axum::Router::oneshot` (no network socket)
+- **veiled-core**: CRS generator independence and determinism; multi-value Pedersen commitment properties; HKDF nullifier derivation (determinism, uniqueness, cross-service independence); public nullifier validity; MasterCredential creation and recomputation; RegisteredIdentity index determination; full Phase 1+2 flow; Bootle/Groth proof correctness
+- **veiled-registry (unit)**: store registration (single + multi-nullifier), duplicate rejection (atomic), set rollover, DB persistence round-trips, Bitcoin anchor (commitment-to-user, vtxo-tree construction, CRS-to-anchor flow)
+- **veiled-registry (integration)**: all HTTP endpoints exercised via `axum::Router::oneshot` (no network socket)
 
 ---
 
 ## Roadmap
 
-- [x] SHA256-based nullifiers
-- [x] Pedersen commitments on secp256k1 (`C = r·G + v·H`)
+- [x] CRS generation with HashToCurve generators (Phase 0)
+- [x] Multi-value Pedersen commitments `Φ = k·g + Σ s_l·h_l` (Phase 0)
+- [x] HKDF per-verifier nullifier derivation with automatic cross-service unlinkability (Phase 0)
+- [x] Public nullifiers `nul_l = s_l · g` as Sybil-resistance tokens (Phase 1)
+- [x] MasterCredential creation with recomputable Φ (Phase 1)
+- [x] RegisteredIdentity with index determination (Phase 2)
+- [x] Multi-nullifier atomic registration endpoint (Phase 2)
+- [x] Bitcoin anchoring via vtxo-tree (sealed sets → P2TR leaf keys) (Phase 2)
 - [x] Bootle/Groth one-out-of-many membership proof (M=10, N=1024)
 - [x] SQLite persistence (write-through, survives restarts)
 - [x] CLI client (generate-key, derive, register, has, sets, set, prove, save-key, load-key)
 - [x] Integration tests (HTTP-level, in-memory SQLite)
-- [x] Usage examples (credentials, pedersen, membership_proof)
 - [x] `POST /api/v1/verify` — server-side ZK proof verification endpoint
-- [x] CLI: load/save key material from a local keyfile
-- [ ] Pedersen commitment upgrade to use `hash_to_scalar` for the nullifier value
+- [ ] Phase 3: Service-specific credential derivation + Bootle/Groth proof adaptation for multi-value commitments
+- [ ] Phase 4: Anonymous authentication protocol

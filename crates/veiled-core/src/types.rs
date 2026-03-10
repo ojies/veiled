@@ -18,6 +18,20 @@ pub struct Commitment(#[serde(with = "hex_bytes_33")] pub [u8; 33]);
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlindingKey(#[serde(with = "hex_bytes")] pub [u8; 32]);
 
+/// 32-byte master secret used to derive per-service-provider nullifiers via HKDF.
+///
+/// This is the user's root identity secret — must be kept private.
+/// A single master secret deterministically produces L different nullifiers
+/// (one per service provider) via `HKDF(master_secret, salt=service_name)`.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MasterSecret(#[serde(with = "hex_bytes")] pub [u8; 32]);
+
+/// 32-byte child credential randomness used to derive service-specific
+/// authentication keys via HKDF. Independent from `sk` (MasterSecret) so
+/// that service registrations don't leak information about nullifiers.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChildRandomness(#[serde(with = "hex_bytes")] pub [u8; 32]);
+
 /// Human-readable identity name (username / handle).
 ///
 /// Length is capped at [`Name::MAX_LEN`] bytes (255, fitting in a `u8`).
@@ -121,10 +135,20 @@ impl BlindingKey {
     pub fn as_bytes(&self) -> &[u8] { &self.0 }
 }
 
+impl MasterSecret {
+    pub fn as_bytes(&self) -> &[u8] { &self.0 }
+}
+
+impl ChildRandomness {
+    pub fn as_bytes(&self) -> &[u8] { &self.0 }
+}
+
 impl fmt::Debug for PublicKey  { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "PublicKey({})", hex::encode(self.0)) } }
 impl fmt::Debug for Nullifier  { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "Nullifier({})", hex::encode(self.0)) } }
 impl fmt::Debug for Commitment { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "Commitment({})", hex::encode(self.0)) } }
-impl fmt::Debug for BlindingKey{ fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "BlindingKey(...)") } }
+impl fmt::Debug for BlindingKey   { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "BlindingKey(...)") } }
+impl fmt::Debug for MasterSecret    { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "MasterSecret(...)") } }
+impl fmt::Debug for ChildRandomness { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "ChildRandomness(...)") } }
 impl fmt::Debug for Name       { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "Name({:?})", self.0) } }
 impl fmt::Display for Name     { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) } }
 

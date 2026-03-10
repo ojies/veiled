@@ -40,7 +40,7 @@ impl RegistryStore {
         self.nullifiers.contains(nul)
     }
 
-    /// Register a commitment + nullifier pair.
+    /// Register a commitment + nullifier pair (single nullifier).
     ///
     /// Returns `RegisterResult` on success, or an error if the nullifier has
     /// already been used (Sybil resistance).
@@ -75,8 +75,60 @@ impl RegistryStore {
         Ok(RegisterResult { set_id, index, new_set_opened })
     }
 
+    /// Register a master identity commitment with ALL per-service-provider nullifiers.
+    ///
+    /// This is `addID(Φ)` from the ASC specification. The commitment is the
+    /// multi-value Pedersen commitment (master identity), and the nullifiers
+    /// are ALL L per-verifier nullifiers for Sybil resistance.
+    ///
+    /// ALL nullifiers are checked for duplicates. If any is already registered,
+    /// the entire registration is rejected.
+    pub fn register_identity(
+        &mut self,
+        commitment: Commitment,
+        nullifiers: Vec<Nullifier>,
+    ) -> Result<RegisterResult, RegisterError> {
+        // Check ALL nullifiers for duplicates before making any changes.
+        for nul in &nullifiers {
+            if self.nullifiers.contains(nul) {
+                return Err(RegisterError::NullifierAlreadyUsed);
+            }
+        }
+
+        // Seal current set if full and open a new one.
+        let new_set_opened = self.current_set().is_full();
+        if new_set_opened {
+            let next_id = self.sets.len() as u64;
+            self.sets.push(AnonymitySet::new(next_id, self.set_capacity));
+        }
+
+        let set_id;
+        let index;
+        {
+            let set = self.current_set_mut();
+            set_id = set.id;
+            index = set.commitments.len();
+            set.push(commitment);
+        }
+
+        // Insert ALL nullifiers.
+        for nul in nullifiers {
+            self.nullifiers.insert(nul);
+        }
+
+        Ok(RegisterResult { set_id, index, new_set_opened })
+    }
+
     pub fn get_set(&self, id: u64) -> Option<&AnonymitySet> {
         self.sets.get(id as usize)
+    }
+
+    /// Check if an anonymity set is full (sealed) and ready for use.
+    ///
+    /// Returns `None` if the set doesn't exist, `Some(true)` if sealed,
+    /// `Some(false)` if still accepting registrations.
+    pub fn is_set_sealed(&self, set_id: u64) -> Option<bool> {
+        self.get_set(set_id).map(|s| s.is_full())
     }
 
     fn current_set(&self) -> &AnonymitySet {
@@ -132,6 +184,37 @@ mod tests {
             store.register(make_commitment(2), nul),
             Err(RegisterError::NullifierAlreadyUsed)
         ));
+    }
+
+    #[test]
+    fn register_identity_with_multiple_nullifiers() {
+        let mut store = RegistryStore::new(4);
+        let nuls = vec![make_nullifier(1), make_nullifier(2), make_nullifier(3)];
+        let result = store.register_identity(make_commitment(1), nuls).unwrap();
+        assert_eq!(result.set_id, 0);
+        assert_eq!(result.index, 0);
+        // All 3 nullifiers should be registered
+        assert!(store.has_nullifier(&make_nullifier(1)));
+        assert!(store.has_nullifier(&make_nullifier(2)));
+        assert!(store.has_nullifier(&make_nullifier(3)));
+    }
+
+    #[test]
+    fn register_identity_rejects_any_duplicate_nullifier() {
+        let mut store = RegistryStore::new(4);
+        // Register first identity with nullifiers 1,2,3
+        store
+            .register_identity(make_commitment(1), vec![make_nullifier(1), make_nullifier(2), make_nullifier(3)])
+            .unwrap();
+        // Second identity shares nullifier 2 — should be rejected
+        let result = store.register_identity(
+            make_commitment(2),
+            vec![make_nullifier(4), make_nullifier(2), make_nullifier(5)],
+        );
+        assert!(matches!(result, Err(RegisterError::NullifierAlreadyUsed)));
+        // Nullifiers 4 and 5 should NOT have been inserted (atomic rejection)
+        assert!(!store.has_nullifier(&make_nullifier(4)));
+        assert!(!store.has_nullifier(&make_nullifier(5)));
     }
 
     #[test]
