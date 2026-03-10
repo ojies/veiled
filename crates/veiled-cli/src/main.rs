@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use veiled_core::{BlindingKey, PublicKey, commit, compute_nullifier};
+use veiled_core::{BlindingKey, Commitment, Name, PublicKey, commit, compute_nullifier, prove_membership};
 
 // ── CLI definition ────────────────────────────────────────────────────────────
 
@@ -73,6 +73,56 @@ enum Command {
         #[arg(long)]
         id: u64,
     },
+
+    /// Save a public key and blinding key to a JSON keyfile.
+    SaveKey {
+        /// Hex-encoded 32-byte public key.
+        #[arg(long)]
+        pub_key: String,
+
+        /// Hex-encoded 32-byte blinding key.
+        #[arg(long)]
+        blinding: String,
+
+        /// Path to write the keyfile (default: veiled-keys.json).
+        #[arg(long, default_value = "veiled-keys.json")]
+        out: String,
+    },
+
+    /// Load a public key and blinding key from a JSON keyfile.
+    LoadKey {
+        /// Path to the keyfile (default: veiled-keys.json).
+        #[arg(long, default_value = "veiled-keys.json")]
+        file: String,
+    },
+
+    /// Generate a one-out-of-many membership proof (local computation).
+    ///
+    /// Fetches the anonymity set from the server, then generates a ZK proof
+    /// that you know an opening for one of its commitments — without revealing
+    /// which one.  The proof is printed as hex and can be submitted to a future
+    /// `/api/v1/verify` endpoint.
+    Prove {
+        /// Hex-encoded 32-byte public key.
+        #[arg(long)]
+        pub_key: String,
+
+        /// Your chosen name / handle.
+        #[arg(long)]
+        name: String,
+
+        /// Hex-encoded 32-byte blinding key used during registration.
+        #[arg(long)]
+        blinding: String,
+
+        /// The anonymity set ID returned by `register`.
+        #[arg(long)]
+        set_id: u64,
+
+        /// Your index within that set (returned by `register`).
+        #[arg(long)]
+        index: usize,
+    },
 }
 
 // ── API types (mirrors the server's JSON) ────────────────────────────────────
@@ -120,6 +170,12 @@ struct SetDetail {
 #[derive(Deserialize, Debug)]
 struct ApiError {
     error: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Keyfile {
+    pub_key: String,
+    blinding: String,
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -174,6 +230,7 @@ fn main() {
                 Some(b) => parse_blinding(&b).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); }),
                 None => BlindingKey(random_32()),
             };
+            let name = Name::try_new(name).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
 
             let nullifier = compute_nullifier(&pk, &name);
             let commitment = commit(&nullifier, &bk);
@@ -198,6 +255,7 @@ fn main() {
                     b
                 }
             };
+            let name = Name::try_new(name).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
 
             let nullifier = compute_nullifier(&pk, &name);
             let commitment = commit(&nullifier, &bk);
@@ -272,6 +330,70 @@ fn main() {
             for (i, c) in s.commitments.iter().enumerate() {
                 println!("  [{i}] {c}");
             }
+        }
+
+        Command::SaveKey { pub_key, blinding, out } => {
+            // Validate both keys before writing.
+            parse_pub_key(&pub_key).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
+            parse_blinding(&blinding).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
+
+            let kf = Keyfile { pub_key, blinding };
+            let json = serde_json::to_string_pretty(&kf).expect("serialization failed");
+            std::fs::write(&out, &json)
+                .unwrap_or_else(|e| { eprintln!("failed to write keyfile: {e}"); std::process::exit(1); });
+            println!("keys saved to {out}");
+        }
+
+        Command::LoadKey { file } => {
+            let json = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| { eprintln!("failed to read keyfile: {e}"); std::process::exit(1); });
+            let kf: Keyfile = serde_json::from_str(&json)
+                .unwrap_or_else(|e| { eprintln!("invalid keyfile: {e}"); std::process::exit(1); });
+            // Validate on load.
+            parse_pub_key(&kf.pub_key).unwrap_or_else(|e| { eprintln!("keyfile pub_key invalid: {e}"); std::process::exit(1); });
+            parse_blinding(&kf.blinding).unwrap_or_else(|e| { eprintln!("keyfile blinding invalid: {e}"); std::process::exit(1); });
+            println!("pub_key:  {}", kf.pub_key);
+            println!("blinding: {}", kf.blinding);
+        }
+
+        Command::Prove { pub_key, name, blinding, set_id, index } => {
+            let pk  = parse_pub_key(&pub_key).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
+            let bk  = parse_blinding(&blinding).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
+            let name = Name::try_new(name).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
+            let nullifier = compute_nullifier(&pk, &name);
+
+            // Fetch the anonymity set from the registry.
+            let url = format!("{}/api/v1/sets/{set_id}", cli.server);
+            let resp = client.get(&url).send()
+                .unwrap_or_else(|e| { eprintln!("request failed: {e}"); std::process::exit(1); });
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            check_api_error(status, &body);
+
+            let detail: SetDetail = serde_json::from_str(&body).expect("unexpected response format");
+            let set: Vec<Commitment> = detail.commitments.iter()
+                .map(|hex_str| Commitment::from_hex(hex_str)
+                    .unwrap_or_else(|e| { eprintln!("bad commitment in set: {e}"); std::process::exit(1); }))
+                .collect();
+
+            println!("generating proof for set {} index {} ({} commitments)…", set_id, index, set.len());
+            let proof = prove_membership(&set, index, &nullifier, &bk)
+                .unwrap_or_else(|e| { eprintln!("prove failed: {e}"); std::process::exit(1); });
+
+            // Serialise the proof as a flat hex blob.
+            let mut bytes = Vec::with_capacity(878);
+            bytes.extend_from_slice(&proof.a);
+            bytes.extend_from_slice(&proof.b);
+            bytes.extend_from_slice(&proof.c);
+            bytes.extend_from_slice(&proof.d);
+            for g in &proof.g { bytes.extend_from_slice(g); }
+            for f in &proof.f { bytes.extend_from_slice(f); }
+            bytes.extend_from_slice(&proof.z_a);
+            bytes.extend_from_slice(&proof.z_c);
+            bytes.extend_from_slice(&proof.z);
+
+            println!("proof ({} bytes):", bytes.len());
+            println!("{}", hex::encode(&bytes));
         }
     }
 }

@@ -5,7 +5,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::{
     db::Db,
-    routes::{has::has, register::register, sets::{get_set, list_sets}},
+    routes::{has::has, register::register, sets::{get_set, list_sets}, verify::verify},
     store::RegistryStore,
 };
 
@@ -32,6 +32,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/has",      post(has))
         .route("/api/v1/sets",     get(list_sets))
         .route("/api/v1/sets/:id", get(get_set))
+        .route("/api/v1/verify",   post(verify))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

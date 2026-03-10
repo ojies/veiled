@@ -15,6 +15,10 @@ pub enum AppError {
     SetNotFound(u64),
     /// A database operation failed.
     Db(String),
+    /// Generic bad request.
+    BadRequest(String),
+    /// A requested resource does not exist.
+    NotFound,
 }
 
 impl IntoResponse for AppError {
@@ -35,6 +39,14 @@ impl IntoResponse for AppError {
             AppError::Db(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("database error: {msg}"),
+            ),
+            AppError::BadRequest(msg) => (
+                StatusCode::BAD_REQUEST,
+                msg.clone(),
+            ),
+            AppError::NotFound => (
+                StatusCode::NOT_FOUND,
+                "not found".to_string(),
             ),
         };
 

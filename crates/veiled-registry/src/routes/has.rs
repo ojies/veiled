@@ -1,6 +1,6 @@
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
-use veiled_core::{compute_nullifier, PublicKey};
+use veiled_core::{Name, compute_nullifier, PublicKey};
 
 use crate::{error::AppError, server::AppState};
 
@@ -20,7 +20,7 @@ pub struct HasRequest {
     /// Hex-encoded 32-byte public key.
     pub pub_key: String,
     /// The human-readable name (username / handle).
-    pub name: String,
+    pub name: Name,
 }
 
 #[derive(Serialize)]

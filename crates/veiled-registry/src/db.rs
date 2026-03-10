@@ -62,7 +62,7 @@ impl Db {
                 let commitments: Vec<Commitment> = cstmt
                     .query_map(params![*set_id as i64], |row| {
                         let blob: Vec<u8> = row.get(0)?;
-                        let arr: [u8; 32] = blob.try_into().map_err(|_| {
+                        let arr: [u8; 33] = blob.try_into().map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
                                 0,
                                 "commitment".into(),
@@ -169,7 +169,7 @@ mod tests {
         // Seed set 0.
         let _ = db.load_store(4).unwrap();
 
-        let commitment = Commitment([0xAA; 32]);
+        let commitment = Commitment([0xAA; 33]);
         let nullifier = Nullifier([0xBB; 32]);
         db.persist_registration(0, 0, &commitment, &nullifier).unwrap();
 
@@ -185,10 +185,10 @@ mod tests {
         let _ = db.load_store(2).unwrap();
 
         // Fill set 0 (capacity 2) and open set 1.
-        db.persist_registration(0, 0, &Commitment([1; 32]), &Nullifier([1; 32])).unwrap();
-        db.persist_registration(0, 1, &Commitment([2; 32]), &Nullifier([2; 32])).unwrap();
+        db.persist_registration(0, 0, &Commitment([1; 33]), &Nullifier([1; 32])).unwrap();
+        db.persist_registration(0, 1, &Commitment([2; 33]), &Nullifier([2; 32])).unwrap();
         db.persist_new_set(1, 2).unwrap();
-        db.persist_registration(1, 0, &Commitment([3; 32]), &Nullifier([3; 32])).unwrap();
+        db.persist_registration(1, 0, &Commitment([3; 33]), &Nullifier([3; 32])).unwrap();
 
         let store = db.load_store(2).unwrap();
         assert_eq!(store.sets.len(), 2);

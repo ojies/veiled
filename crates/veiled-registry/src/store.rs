@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use veiled_core::{AnonymitySet, Commitment, Nullifier};
 
 /// Default number of commitments per anonymity set.
-pub const DEFAULT_SET_CAPACITY: usize = 8;
+pub const DEFAULT_SET_CAPACITY: usize = 1024;
 
 /// In-memory registry state.
 ///
@@ -111,7 +111,7 @@ pub enum RegisterError {
 mod tests {
     use super::*;
 
-    fn make_commitment(n: u8) -> Commitment { Commitment([n; 32]) }
+    fn make_commitment(n: u8) -> Commitment { Commitment([n; 33]) }
     fn make_nullifier(n: u8) -> Nullifier { Nullifier([n; 32]) }
 
     #[test]
