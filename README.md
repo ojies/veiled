@@ -62,15 +62,34 @@ Master credential = (Φ, sk, r, k)                       # user stores ~96 bytes
 ### Phase 2 — Master Identity Registration (on-chain via Bitcoin)
 
 ```
-send Φ to IdR (Bitcoin vtxo-tree, not Ethereum)
+send Φ to IdR (Bitcoin, not Ethereum)
 wait for Λ_{d̂} to fill to N = 1024
 receive Λ_{d̂} = [Φ_1, ..., Φ_1024]
 determine own index j
 store (Φ_j, sk, r, k, d̂, Λ_{d̂})
 ```
 
-The sealed anonymity set is anchored on Bitcoin via a vtxo-tree: each commitment
-(a 33-byte compressed secp256k1 point) becomes a P2TR leaf key directly.
+Once 1024 users have registered and the anonymity set is full, it is **sealed**
+(frozen — no more additions, no removals, ever). The sealed set is then anchored
+on Bitcoin using a **vtxo-tree** (virtual transaction output tree):
+
+- A vtxo-tree is a binary tree of **pre-signed Bitcoin transactions**. Only the
+  root transaction is broadcast on-chain. The interior nodes are connector
+  transactions, and the 1024 leaves are individual outputs — one per user.
+- Each leaf output is a **P2TR (Pay-to-Taproot)** output whose internal key is
+  the user's commitment `Φ`. This works because `Φ` is a 33-byte compressed
+  secp256k1 point — which is already a valid public key.
+- The single on-chain UTXO (the root) cryptographically commits to all 1024
+  identities via the transaction tree structure. This is far more efficient than
+  storing 1024 entries in an Ethereum smart contract.
+- Spending any leaf requires proving knowledge of the commitment opening
+  (the secret values `k, s_1..s_L`) — this is where the ZK proof comes in.
+
+After sealing, the user downloads the complete set `Λ_{d̂} = [Φ_1, ..., Φ_1024]`
+and finds their own position `j` in the list. They need the full set stored
+locally because the Bootle/Groth zero-knowledge proof requires the prover to
+have the entire ring of 1024 commitments — proving "I know the opening to one
+of these 1024 commitments" means knowing all 1024 to construct the proof.
 
 ---
 
@@ -83,12 +102,18 @@ The sealed anonymity set is anchored on Bitcoin via a vtxo-tree: each commitment
 ```
 
 Where `g, h_1..h_L` are L+1 independent generators from the CRS.
-The commitment hides L nullifier values under a single blinding key k.
+This packs L separate nullifier values into a single 33-byte elliptic curve
+point, hidden by the blinding key k. Think of it as a sealed envelope
+containing L secrets — anyone can see the envelope (Φ), but nobody can read
+what's inside without knowing k.
 
 Properties:
 - **Hiding**: given only Φ, an adversary cannot determine any s_l without k
-- **Binding**: computationally infeasible to open Φ to different values
-- **Homomorphic**: required for the Bootle/Groth membership proof
+- **Binding**: computationally infeasible to find a different set of values
+  (s_1', ..., s_L', k') that produce the same Φ. This means each user is
+  locked to exactly one nullifier per service — Sybil resistance at the math level.
+- **Homomorphic**: commitments can be added together, which is required for
+  the Bootle/Groth membership proof to work over the set
 
 ### HKDF per-verifier nullifier derivation
 
@@ -96,25 +121,47 @@ Properties:
 s_l = HKDF-SHA256(IKM = sk, salt = v_l, info = "CRS-ASC-nullifier")
 ```
 
-Each master secret produces L different nullifiers (one per service provider).
-Same master secret + different service → different unlinkable nullifiers.
-This gives **automatic cross-service unlinkability** — a protocol property,
-not a manual workaround.
+HKDF (HMAC-based Key Derivation Function, RFC 5869) is a standard way to
+derive multiple independent keys from one master secret. Here, the same `sk`
+is combined with different service names to produce different nullifier scalars:
+
+- `HKDF(sk, "twitter.com")` → `s_1` (a 32-byte scalar for Twitter)
+- `HKDF(sk, "github.com")` → `s_2` (a completely different 32-byte scalar for GitHub)
+
+HKDF's security guarantee: even if you know both service names, the two outputs
+are computationally indistinguishable from independent random values. This gives
+**automatic cross-service unlinkability** — a protocol property, not a manual
+workaround. Two colluding services cannot determine that their nullifiers came
+from the same user.
 
 ### Public nullifier (group element)
 
 ```
-nul_l = s_l · g
+nul_l = s_l · g     (scalar multiplication — produces a curve point)
 ```
 
+The raw scalar `s_l` is a secret (it's inside the commitment). The public
+nullifier `nul_l` is what gets shown to service providers — it's the result
+of multiplying the secret scalar by the generator point g. This is a one-way
+operation (you can't recover `s_l` from `nul_l` without solving the discrete
+log problem).
+
 Serves double duty:
-- **Sybil-resistance token**: unique per (master identity, service provider)
-- **Public authentication key**: the user can prove knowledge of s_l
+- **Sybil-resistance token**: same `sk` + same service always produces the same
+  `nul_l`, so a service can detect if the same user tries to register twice
+- **Public authentication key**: the user can later prove they know the secret
+  `s_l` corresponding to `nul_l` (e.g., via a Schnorr signature)
 
 ### One-out-of-many proof — Bootle/Groth 2015
 
-Proves in zero knowledge that the prover knows an index `l` and opening
-such that `set[l]` is their commitment, without revealing `l`.
+A zero-knowledge proof that says: "I know the secret values that open one of
+the 1024 commitments in this set — but I won't tell you which one."
+
+More precisely, the prover demonstrates knowledge of an index `j` and opening
+values `(s_1..s_L, k)` such that `set[j] = k·g + s_1·h_1 + ... + s_L·h_L`,
+without revealing `j` or any of the secret values. The verifier is convinced
+the prover is a legitimate member of the set but learns nothing about which
+member they are.
 
 Parameters: **M = 10**, **N = 2^M = 1024** (ring size matches anonymity set capacity).
 
@@ -135,8 +182,8 @@ Proof size: **878 bytes**.
 | **Master identity (Φ)** | `k·g + Σ s_l·h_l` — 33-byte multi-value Pedersen commitment |
 | **Master credential** | Tuple `(Φ, sk, r, k)` — user stores locally |
 | **Registered identity** | `(Φ_j, sk, r, k, d̂, Λ_{d̂})` — includes frozen anonymity set and own index |
-| **Anonymity set (Λ)** | Fixed-size batch of 1024 commitments; sealed sets are the accumulator for ZK proofs |
-| **vtxo-tree** | Binary pre-signed transaction tree anchoring commitments on Bitcoin |
+| **Anonymity set (Λ)** | Fixed-size batch of 1024 commitments; once full the set is sealed (frozen forever) and serves as the ring for ZK proofs |
+| **vtxo-tree** | Binary tree of pre-signed Bitcoin transactions; root is broadcast on-chain, 1024 leaves hold one P2TR output per user's Φ |
 
 ---
 
@@ -204,14 +251,22 @@ Because nullifiers are derived via HKDF with the service name as salt,
 different services see different nullifiers from the same user — providing
 **automatic cross-service unlinkability** as a protocol property.
 
-### Anonymity set sealing
+### Anonymity set sealing and Bitcoin anchoring
 
 When an anonymity set reaches its capacity (**1024** commitments), it is
-sealed. New registrations go into a fresh set. Sealed sets are immutable and
-serve as the accumulator for the Bootle/Groth membership proof.
+**sealed** — frozen permanently. No commitments can be added or removed after
+sealing. New registrations go into a fresh set. This immutability is critical:
+the Bootle/Groth ZK proof is generated against a specific fixed list of 1024
+commitments. If the list could change between proof generation and verification,
+the proof would be invalid.
 
-Sealed sets are anchored on Bitcoin via vtxo-trees: each commitment is a valid
-secp256k1 point and becomes a P2TR leaf key in the transaction tree.
+Sealed sets are anchored on Bitcoin via a **vtxo-tree**: a binary tree of
+pre-signed transactions where only the root is broadcast on-chain. The root
+UTXO cryptographically commits to all 1024 leaf outputs. Each leaf is a P2TR
+output locked to one user's commitment Φ (which is already a valid secp256k1
+public key). This replaces the Ethereum smart contract from the ASC paper —
+instead of storing 1024 entries in EVM storage, a single Bitcoin UTXO anchors
+the entire set.
 
 ---
 

@@ -27,7 +27,9 @@ Key properties the paper achieves:
 - **Sybil resistance** — one nullifier per service per master identity.
 - **Automatic cross-service unlinkability** — different services derive different nullifiers from the same master identity; they cannot collude to link a prover.
 - **Multi-value commitment** — L nullifier values committed under a single blinding key.
-- **Bitcoin-native** — anchored on Bitcoin via vtxo-trees, not Ethereum smart contracts.
+- **Bitcoin-native** — veiled implements this on Bitcoin via vtxo-trees (pre-signed
+  transaction trees where each commitment becomes a P2TR leaf key), replacing the
+  Ethereum smart contracts described in the original paper.
 
 ---
 
@@ -40,8 +42,8 @@ Key properties the paper achieves:
 | HKDF per-verifier nullifier derivation | `s_l = HKDF(sk, salt=v_l, info="CRS-ASC-nullifier")` |
 | Public nullifiers as group elements | `nul_l = s_l · g` (33-byte compressed secp256k1 point) |
 | MasterCredential tuple | `(Φ, sk, r, k)` — user stores ~96 bytes |
-| RegisteredIdentity with frozen set | `(Φ_j, sk, r, k, d̂, Λ_{d̂})` |
-| Anonymity set of size 1024 | Same ring size (power of 2 for vtxo-tree) |
+| RegisteredIdentity with frozen set | `(Φ_j, sk, r, k, d̂, Λ_{d̂})` — user keeps the full set locally for ZK proof generation |
+| Anonymity set of size 1024 | Same ring size (power of 2 for efficient vtxo-tree binary structure) |
 | Automatic cross-service unlinkability | Same (sk, different v_l) → different nullifiers |
 | Bootle/Groth one-out-of-many proof | Same 2015 paper; M=10, N=1024, 878-byte proof |
 | Blinding key stays client-side | Neither the registry nor any verifier sees k |
@@ -68,20 +70,26 @@ Key properties the paper achieves:
 
 **ASC (paper):**
 The identity registry `IdR` is an Ethereum smart contract. Users call
-`addID(Φ)` to register, and the contract emits events when sets fill.
+`addID(Φ)` to register (costs gas), and the contract emits events when sets
+fill. Each commitment is stored in EVM contract storage.
 
 **veiled:**
 The identity registry is a combination of:
-- An HTTP API (`POST /api/v1/register-identity`) for registration
-- SQLite for persistence
+- An HTTP API (`POST /api/v1/register-identity`) for off-chain registration
+- SQLite for persistence between server restarts
 - Bitcoin vtxo-trees for on-chain anchoring of sealed sets
 
-Each sealed anonymity set of 1024 commitments is anchored on Bitcoin via a
-vtxo-tree. Since commitments are valid 33-byte compressed secp256k1 points,
-they map directly to P2TR leaf keys — no additional encoding needed.
+When an anonymity set reaches 1024 commitments and is sealed, it is anchored
+on Bitcoin via a **vtxo-tree** — a binary tree of pre-signed transactions
+where only the root is broadcast on-chain. Each of the 1024 leaves is a P2TR
+output whose internal key is a user's commitment Φ. This works natively
+because Φ is already a valid 33-byte compressed secp256k1 public key — no
+encoding or wrapping needed.
 
 **Consequence:** veiled achieves the same on-chain anchoring guarantees as
-the ASC paper but on Bitcoin's UTXO model rather than Ethereum's account model.
+the ASC paper but on Bitcoin's UTXO model. A single on-chain UTXO anchors
+1024 identities, which is significantly more efficient than storing 1024
+entries individually in an Ethereum smart contract.
 
 ---
 
@@ -165,25 +173,38 @@ registration is rejected with 409 Conflict. No partial registrations.
 
 **ASC (paper):**
 The membership proof and nullifier-authenticity proof are combined into a
-single composite proof.
+single composite proof. The prover sends one message that simultaneously proves:
+(a) "I am a member of this anonymity set" and (b) "this nullifier authentically
+belongs to my committed identity."
 
 **veiled (current):**
 The Bootle/Groth proof currently operates on the old single-value commitment
-scheme. Adapting it to prove membership for multi-value commitments is planned
-for Phase 3.
+scheme (`C = r·G + v·H`). It has not yet been adapted to work with the new
+multi-value commitments (`Φ = k·g + s_1·h_1 + ... + s_L·h_L`). This
+adaptation — making the ZK proof open a specific position `l` within the
+multi-value commitment to reveal `nul_l = s_l · g` without revealing the
+other positions — is the main task for Phase 3.
 
 ---
 
 ### 7. Where Sybil resistance lives
 
 **ASC (paper):**
-Each verifier maintains its own local nullifier list. The verifier is
-self-sovereign.
+Each verifier maintains its own local nullifier list. When a user presents
+`nul_l` to service l, the service checks its list — if `nul_l` is already
+there, the user has already registered with that service. The verifier is
+self-sovereign and needs no central authority.
 
 **veiled:**
-The central registry maintains a global nullifier index. At registration time,
-all L nullifiers are checked. Additionally, each service provider can maintain
-its own local `nul_l = s_l · g` list for per-service Sybil resistance.
+Sybil resistance operates at two levels:
+1. **Global (at registration)**: the central registry maintains a global index
+   of all L×N nullifier scalars. When a user registers, all L nullifiers are
+   checked atomically. If any one has been seen before, the entire registration
+   is rejected. This prevents the same master secret from being used twice.
+2. **Per-service (at authentication)**: each service provider can additionally
+   maintain its own local list of seen public nullifiers `nul_l = s_l · g`.
+   Since the same `(sk, v_l)` always produces the same `nul_l`, a service can
+   detect duplicate accounts independently.
 
 ---
 
