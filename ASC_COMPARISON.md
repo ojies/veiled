@@ -45,7 +45,10 @@ Key properties the paper achieves:
 | RegisteredIdentity with frozen set | `(Φ_j, sk, r, k, d̂, Λ_{d̂})` — user keeps the full set locally for ZK proof generation |
 | Anonymity set of size 1024 | Same ring size (power of 2 for efficient vtxo-tree binary structure) |
 | Automatic cross-service unlinkability | Same (sk, different v_l) → different nullifiers |
-| Bootle/Groth one-out-of-many proof | Same 2015 paper; M=10, N=1024, 878-byte proof |
+| Bootle/Groth one-out-of-many proof | Same 2015 paper; M=10, N=1024; adapted for multi-value commitments with L+1 generators |
+| Schnorr `π_value` for nullifier authenticity | `nul_l = s_l · g` proved via Schnorr proof bound to membership proof |
+| Service-specific child credentials | `csk_l = HKDF(r, salt=v_l)`, pseudonym `ϕ_l = csk_l · g` |
+| FriendlyName bound in commitment | `name_scalar·h_name` with `h_name = HashToCurve("CRS-ASC-generator-name")` |
 | Blinding key stays client-side | Neither the registry nor any verifier sees k |
 
 ---
@@ -58,7 +61,8 @@ Key properties the paper achieves:
 | On-chain anchor | EVM transaction | P2TR leaf keys in pre-signed tx tree |
 | Registration fee | Gas fee | Bitcoin tx fee |
 | Set filling trigger | Smart contract event | Registry monitors set capacity |
-| Proof composition | Single composite proof | Two-step: `/has` then `/verify` (to be unified in Phase 3) |
+| Proof composition | Single composite proof | Composite: Bootle/Groth membership + Schnorr `π_value` nullifier authenticity |
+| FriendlyName | Not in paper | Committed via dedicated `h_name` generator |
 | Legacy single-nullifier mode | Not in paper | Kept for backward compatibility |
 | Registry dependency | Optional at verify time | Required (stores sets, runs verifier) |
 
@@ -169,7 +173,7 @@ registration is rejected with 409 Conflict. No partial registrations.
 
 ---
 
-### 6. Proof composition (current limitation)
+### 6. Proof composition — now matching the paper
 
 **ASC (paper):**
 The membership proof and nullifier-authenticity proof are combined into a
@@ -178,16 +182,71 @@ single composite proof. The prover sends one message that simultaneously proves:
 belongs to my committed identity."
 
 **veiled (current):**
-The Bootle/Groth proof currently operates on the old single-value commitment
-scheme (`C = r·G + v·H`). It has not yet been adapted to work with the new
-multi-value commitments (`Φ = k·g + s_1·h_1 + ... + s_L·h_L`). This
-adaptation — making the ZK proof open a specific position `l` within the
-multi-value commitment to reveal `nul_l = s_l · g` without revealing the
-other positions — is the main task for Phase 3.
+The **ServiceRegistrationProof** combines two sub-proofs:
+
+1. **π_membership** — an adapted Bootle/Groth one-out-of-many proof that
+   operates on **shifted commitments** `D[i] = Φ_i - s_l·h_l`. At the
+   prover's index `j`, the l-th term cancels, leaving L+1 active generators
+   `(g, h_m for m ≠ l, h_name)`. The proof shows knowledge of the opening
+   `(k, s_1, ..., s_{l-1}, s_{l+1}, ..., s_L, name_scalar)` to one of the
+   1024 shifted commitments without revealing which one.
+
+2. **π_value** — a Schnorr proof that the revealed public nullifier
+   `nul_l = s_l · g` is correctly formed. The prover demonstrates knowledge
+   of `s_l` such that `nul_l = s_l · g`.
+
+Both proofs are bound together via a shared Fiat-Shamir challenge that
+includes the CRS, pseudonym, public nullifier, service index, set ID,
+the full shifted anonymity set, and all proof commitments. This prevents
+unbinding or replaying proof components independently.
+
+**Total proof size:** 911 + (L+1)×32 bytes (e.g., 1,071 bytes for L=4).
 
 ---
 
-### 7. Where Sybil resistance lives
+### 7. Child credentials and pseudonyms
+
+**ASC (paper):**
+The paper describes service-specific credential derivation where each
+service receives a unique pseudonym derived from the master credential.
+
+**veiled (current):**
+Per-service child credentials are derived via HKDF from the child randomness `r`:
+
+```
+csk_l = HKDF(r, salt=v_l, info="CRS-ASC-child-secret-key")
+ϕ_l   = csk_l · g    (pseudonym — public identity at service l)
+```
+
+The child randomness `r` is independent from the master secret `sk`, so
+authentication keys cannot leak nullifier information. Each service sees
+a different pseudonym `ϕ_l`, providing the same automatic cross-service
+unlinkability as nullifiers.
+
+---
+
+### 8. FriendlyName — veiled extension
+
+**ASC (paper):**
+The paper does not include a human-readable name bound to the commitment.
+
+**veiled (current):**
+veiled extends the commitment with a **FriendlyName** — a user-chosen
+identifier (max 255 bytes) bound via a dedicated generator `h_name`:
+
+```
+name_scalar = SHA256(friendly_name)
+Φ = k·g + s_1·h_1 + ... + s_L·h_L + name_scalar·h_name
+```
+
+The generator `h_name = HashToCurve("CRS-ASC-generator-name")` is
+independent from all other generators. Once committed, the friendly name
+cannot be changed. This is veiled's only structural extension to the
+ASC commitment format.
+
+---
+
+### 9. Where Sybil resistance lives
 
 **ASC (paper):**
 Each verifier maintains its own local nullifier list. When a user presents
@@ -208,26 +267,27 @@ Sybil resistance operates at two levels:
 
 ---
 
-## What veiled achieves from the ASC paper (Phases 0–2)
+## What veiled achieves from the ASC paper (Phases 0–3)
 
 | Property | Status |
 |---|---|
-| CRS with independent generators via HashToCurve | Implemented |
-| Multi-value Pedersen commitment `Φ = k·g + Σ s_l·h_l` | Implemented |
-| HKDF per-verifier nullifier derivation | Implemented |
-| Public nullifiers `nul_l = s_l · g` | Implemented |
-| Automatic cross-service unlinkability | Implemented |
-| MasterCredential `(Φ, sk, r, k)` | Implemented |
-| RegisteredIdentity with frozen anonymity set | Implemented |
-| Multi-nullifier atomic registration | Implemented |
-| Bitcoin on-chain anchoring via vtxo-tree | Implemented |
-| Anonymity set capacity N=1024 | Implemented |
+| CRS with independent generators via HashToCurve | Implemented (Phase 0) |
+| Multi-value Pedersen commitment `Φ = k·g + Σ s_l·h_l + name_scalar·h_name` | Implemented (Phase 0) |
+| HKDF per-verifier nullifier derivation | Implemented (Phase 1) |
+| Public nullifiers `nul_l = s_l · g` | Implemented (Phase 1) |
+| Automatic cross-service unlinkability | Implemented (Phase 1) |
+| MasterCredential `(Φ, sk, r, k)` | Implemented (Phase 1) |
+| FriendlyName bound in commitment via `h_name` | Implemented (Phase 1) |
+| RegisteredIdentity with frozen anonymity set | Implemented (Phase 2) |
+| Multi-nullifier atomic registration | Implemented (Phase 2) |
+| Bitcoin on-chain anchoring via vtxo-tree | Implemented (Phase 2) |
+| Anonymity set capacity N=1024 | Implemented (Phase 2) |
+| Bootle/Groth proof adapted for multi-value commitments (L+1 generators) | Implemented (Phase 3) |
+| Service-specific child credentials and pseudonyms | Implemented (Phase 3) |
+| Composite proof (membership + Schnorr `π_value` nullifier authenticity) | Implemented (Phase 3) |
 
-## What remains (Phases 3+)
+## What remains (Phase 4+)
 
 | Property | Status |
 |---|---|
-| Bootle/Groth proof adapted for multi-value commitments | Planned (Phase 3) |
-| Service-specific credential derivation | Planned (Phase 3) |
-| Single composite proof (membership + nullifier authenticity) | Planned (Phase 3) |
-| Anonymous authentication protocol | Planned (Phase 4) |
+| Full anonymous authentication protocol | Planned (Phase 4) |

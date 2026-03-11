@@ -216,7 +216,7 @@ Proof size: **878 bytes**.
                          │  HTTP
                          ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  Registry (veiled-registry)                                      │
+│  Registry (veiled::registry)                                     │
 │                                                                  │
 │  register-identity handler                                       │
 │  ├── Check ALL L nullifiers for duplicates (atomic)              │
@@ -274,51 +274,48 @@ the entire set.
 
 ```
 veiled/
-├── Cargo.toml                        # workspace
-├── examples/                         # workspace-level example assets
-└── crates/
-    ├── veiled-core/                  # cryptographic primitives & shared types
-    │   ├── examples/
-    │   │   ├── credentials.rs        # key generation + credential derivation
-    │   │   ├── pedersen.rs           # Pedersen commitment properties
-    │   │   └── membership_proof.rs   # full prove/verify over a 1024-element set
-    │   └── src/
-    │       ├── lib.rs                # public API re-exports
-    │       ├── crs.rs                # CRS setup, multi-value Pedersen commitment, HashToCurve generators
-    │       ├── credential.rs         # MasterCredential (Phase 1) + RegisteredIdentity (Phase 2)
-    │       ├── nullifier_v2.rs       # HKDF per-verifier nullifier derivation + public nullifiers
-    │       ├── nullifier.rs          # legacy SHA256(pub_key || name) nullifier (backward compat)
-    │       ├── commitment.rs         # single-value Pedersen commit (used by Bootle/Groth proof)
-    │       ├── proof.rs              # prove_membership / verify_membership (Bootle/Groth)
-    │       └── types.rs              # MasterSecret, ChildRandomness, BlindingKey, Nullifier, Commitment, Name, ...
-    ├── veiled-registry/              # HTTP registry server with SQLite persistence
-    │   ├── src/
-    │   │   ├── lib.rs
-    │   │   ├── main.rs               # entry point
-    │   │   ├── server.rs             # axum router + AppState
-    │   │   ├── db.rs                 # SQLite read/write (write-through)
-    │   │   ├── store.rs              # in-memory state (anonymity sets + nullifier index)
-    │   │   ├── error.rs              # AppError → HTTP responses
-    │   │   ├── bitcoin_anchor.rs     # vtxo-tree anchoring for sealed anonymity sets
-    │   │   └── routes/
-    │   │       ├── register.rs       # POST /api/v1/register + POST /api/v1/register-identity
-    │   │       ├── has.rs            # POST /api/v1/has
-    │   │       ├── sets.rs           # GET  /api/v1/sets[/:id]
-    │   │       └── verify.rs         # POST /api/v1/verify
-    │   └── tests/
-    │       └── api.rs                # HTTP integration tests
-    ├── veiled-cli/                   # Command-line client
-    │   └── src/
-    │       └── main.rs
-    └── vtxo-tree/                    # Bitcoin vtxo-tree (pre-signed tx tree for 1024 users)
-        ├── src/
-        │   ├── lib.rs
-        │   ├── tree.rs
-        │   ├── types.rs
-        │   └── tx.rs
-        └── tests/
-            ├── integration.rs
-            └── e2e.rs
+├── Cargo.toml                        # single package with lib + 2 binaries
+├── src/
+│   ├── lib.rs                        # crate root (pub mod core, registry, vtxo_tree)
+│   ├── core/                         # cryptographic primitives & shared types
+│   │   ├── mod.rs                    # public API re-exports
+│   │   ├── crs.rs                    # CRS setup, multi-value Pedersen commitment, HashToCurve generators
+│   │   ├── credential.rs             # MasterCredential (Phase 1) + RegisteredIdentity (Phase 2) + ServiceRegistration (Phase 3)
+│   │   ├── child_credential.rs       # child secret key + pseudonym derivation (Phase 3)
+│   │   ├── service_proof.rs          # adapted Bootle/Groth proof for multi-value commitments (Phase 3)
+│   │   ├── nullifier_v2.rs           # HKDF per-verifier nullifier derivation + public nullifiers
+│   │   ├── nullifier.rs              # legacy SHA256(pub_key || name) nullifier (backward compat)
+│   │   ├── commitment.rs             # single-value Pedersen commit (used by legacy proof)
+│   │   ├── proof.rs                  # prove_membership / verify_membership (legacy Bootle/Groth)
+│   │   └── types.rs                  # MasterSecret, ChildRandomness, BlindingKey, Nullifier, Commitment, Name, FriendlyName, ...
+│   ├── registry/                     # HTTP registry server with SQLite persistence
+│   │   ├── mod.rs
+│   │   ├── server.rs                 # axum router + AppState
+│   │   ├── db.rs                     # SQLite read/write (write-through)
+│   │   ├── store.rs                  # in-memory state (anonymity sets + nullifier index)
+│   │   ├── error.rs                  # AppError → HTTP responses
+│   │   ├── bitcoin_anchor.rs         # vtxo-tree anchoring for sealed anonymity sets
+│   │   └── routes/
+│   │       ├── register.rs           # POST /api/v1/register + POST /api/v1/register-identity
+│   │       ├── has.rs                # POST /api/v1/has
+│   │       ├── sets.rs               # GET  /api/v1/sets[/:id]
+│   │       └── verify.rs             # POST /api/v1/verify
+│   ├── vtxo_tree/                    # Bitcoin vtxo-tree (pre-signed tx tree for 1024 users)
+│   │   ├── mod.rs
+│   │   ├── tree.rs
+│   │   ├── types.rs
+│   │   └── tx.rs
+│   └── bin/
+│       ├── registry.rs               # registry server entry point
+│       └── cli.rs                    # command-line client
+├── examples/
+│   ├── credentials.rs                # key generation + credential derivation
+│   ├── pedersen.rs                   # Pedersen commitment properties
+│   └── membership_proof.rs           # full prove/verify over a 1024-element set
+└── tests/
+    ├── api.rs                        # HTTP integration tests
+    ├── integration.rs                # vtxo-tree construction tests
+    └── e2e.rs                        # end-to-end Bitcoin regtest tests
 ```
 
 ---
@@ -326,7 +323,7 @@ veiled/
 ## Running the registry server
 
 ```bash
-cargo run -p veiled-registry
+cargo run --bin veiled-registry
 # INFO veiled_registry: database: veiled.db
 # INFO veiled_registry: loaded 1 set(s), 0 nullifier(s)
 # INFO veiled_registry: veiled registry listening on 0.0.0.0:7271
@@ -443,13 +440,13 @@ Verify a 878-byte one-out-of-many membership proof server-side.
 
 ```bash
 # Credential derivation and property checks (instant)
-cargo run --example credentials -p veiled-core
+cargo run --example credentials
 
 # Pedersen commitment properties including homomorphic addition (instant)
-cargo run --example pedersen -p veiled-core
+cargo run --example pedersen
 
 # Full 1024-element anonymity set: prove + verify (~2–5 s release, ~90 s debug)
-cargo run --example membership_proof -p veiled-core --release
+cargo run --example membership_proof --release
 ```
 
 ---
@@ -457,15 +454,14 @@ cargo run --example membership_proof -p veiled-core --release
 ## Testing
 
 ```bash
-cargo test                      # all tests across the workspace
-cargo test -p veiled-core       # 50 crypto primitive + protocol tests
-cargo test -p veiled-registry   # 27 unit + integration tests
+cargo test                      # all 100 tests
+cargo test -- --skip proof      # fast: skip slow proof tests (~40s)
 ```
 
 Test coverage:
-- **veiled-core**: CRS generator independence and determinism; multi-value Pedersen commitment properties; HKDF nullifier derivation (determinism, uniqueness, cross-service independence); public nullifier validity; MasterCredential creation and recomputation; RegisteredIdentity index determination; full Phase 1+2 flow; Bootle/Groth proof correctness
-- **veiled-registry (unit)**: store registration (single + multi-nullifier), duplicate rejection (atomic), set rollover, DB persistence round-trips, Bitcoin anchor (commitment-to-user, vtxo-tree construction, CRS-to-anchor flow)
-- **veiled-registry (integration)**: all HTTP endpoints exercised via `axum::Router::oneshot` (no network socket)
+- **core** (76 unit tests): CRS generator independence and determinism; multi-value Pedersen commitment properties; FriendlyName commitment; HKDF nullifier derivation (determinism, uniqueness, cross-service independence); public nullifier validity; MasterCredential creation and recomputation; RegisteredIdentity index determination; child credential derivation; service registration proof (multi-generator Bootle/Groth); full Phase 1+2+3 flow
+- **registry** (12 unit + 12 integration tests): store registration (single + multi-nullifier), duplicate rejection (atomic), set rollover, DB persistence round-trips, Bitcoin anchor (commitment-to-user, vtxo-tree construction, CRS-to-anchor flow); all HTTP endpoints exercised via `axum::Router::oneshot`
+- **vtxo-tree** (12 tests): tree construction, value conservation, branch integrity, P2TR leaf outputs, determinism, full 1024-user scale
 
 ---
 
@@ -484,5 +480,5 @@ Test coverage:
 - [x] CLI client (generate-key, derive, register, has, sets, set, prove, save-key, load-key)
 - [x] Integration tests (HTTP-level, in-memory SQLite)
 - [x] `POST /api/v1/verify` — server-side ZK proof verification endpoint
-- [ ] Phase 3: Service-specific credential derivation + Bootle/Groth proof adaptation for multi-value commitments
+- [x] Phase 3: Service registration with adapted multi-generator Bootle/Groth proof, child credentials, pseudonyms, Schnorr π_value
 - [ ] Phase 4: Anonymous authentication protocol

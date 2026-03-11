@@ -299,12 +299,136 @@ Once a sealed set is anchored on Bitcoin via a vtxo-tree:
 
 ---
 
+## Phase 3 — Alice authenticates with a service (service registration proof)
+
+Phase 3 builds on the master credential and registered identity to enable
+Alice to prove membership in her anonymity set and authenticate with a
+specific service — all without revealing which commitment is hers.
+
+### FriendlyName — human-readable identity bound to Φ
+
+Before or during credential creation, Alice can choose a **FriendlyName** —
+a human-readable identifier (max 255 bytes) that is cryptographically bound
+inside her commitment via a dedicated generator `h_name`:
+
+```
+name_scalar = SHA256(friendly_name)
+Φ = k·g + s_1·h_1 + ... + s_L·h_L + name_scalar·h_name
+```
+
+The CRS provides `h_name = HashToCurve("CRS-ASC-generator-name")`, an
+independent NUMS generator alongside `g` and `h_1..h_L`. Once committed,
+the friendly name cannot be changed without breaking the cryptographic
+binding in Φ.
+
+### Child credentials — per-service authentication keys
+
+Alice derives a **child secret key** and **pseudonym** for each service `l`:
+
+```
+csk_l = HKDF(r, salt=v_l, info="CRS-ASC-child-secret-key")
+ϕ_l   = csk_l · g    (pseudonym — Alice's public identity at service l)
+```
+
+Key properties:
+- `r` (child randomness) is independent from `sk` (master secret) — auth
+  keys don't leak nullifier information
+- Each service gets a different `csk_l` because the salt changes
+- The pseudonym `ϕ_l` is unlinkable across services (same HKDF guarantee
+  as nullifiers)
+- Alice stores only `(sk, r, k)` (~96 bytes); pseudonyms are recomputed
+  on demand
+
+### Service registration proof — composite membership + nullifier authenticity
+
+To authenticate with service `l`, Alice generates a **ServiceRegistrationProof**
+that simultaneously proves two things:
+
+1. **Membership**: "I know the opening of one of the 1024 commitments in
+   anonymity set `Λ_{d̂}`, without revealing which one."
+2. **Nullifier authenticity**: "The public nullifier `nul_l = s_l · g` I'm
+   presenting is correctly derived from my committed identity."
+
+The proof works by **shifting** each commitment in the anonymity set:
+
+```
+D[i] = Φ_i - s_l·h_l    for all i = 1..1024
+```
+
+At Alice's index `j`, this cancels the `l`-th term:
+
+```
+D[j] = k·g + Σ_{m≠l} s_m·h_m + name_scalar·h_name
+```
+
+The adapted Bootle/Groth proof then proves knowledge of the opening
+`(k, s_1, ..., s_{l-1}, s_{l+1}, ..., s_L, name_scalar)` to one of the
+1024 shifted commitments `D[i]`, using **L+1 active generators**:
+`g`, `h_m` for `m ≠ l`, and `h_name`.
+
+A **Schnorr proof `π_value`** additionally proves that `nul_l = s_l · g`
+is correctly formed: the prover shows knowledge of `s_l` such that the
+publicly revealed `nul_l` equals `s_l` times the base generator.
+
+### Proof structure and size
+
+```
+ServiceRegistrationProof {
+  π_membership:
+    A, B, C, D     — 4 aggregate bit commitments (132 bytes)
+    E_poly         — M=10 polynomial decomposition points (330 bytes)
+    f              — M=10 scalar evaluations (320 bytes)
+    z_a, z_c       — 2 bit blinding responses (64 bytes)
+    z_responses    — (L+1) multi-generator polynomial responses
+
+  π_value (Schnorr):
+    schnorr_r      — nonce commitment R = t·g (33 bytes)
+    schnorr_s      — response s = t + e·s_l (32 bytes)
+}
+
+Total: 911 + (L+1)×32 bytes
+Example: L=4 providers → 911 + 160 = 1,071 bytes
+```
+
+The Fiat-Shamir challenge binds the proof to the CRS, pseudonym, public
+nullifier, service index, set ID, shifted anonymity set, and all
+commitments — preventing replay across services or sets.
+
+### What the service provider sees
+
+After verification, service `l` learns:
+- `nul_l = s_l · g` — Alice's unique nullifier for this service (Sybil resistance)
+- `ϕ_l = csk_l · g` — Alice's pseudonym (her public identity at service `l`)
+- That Alice is a valid member of anonymity set `d̂`
+
+Service `l` does **not** learn:
+- Which of the 1024 commitments is Alice's
+- Alice's nullifiers for any other service
+- Alice's blinding key `k`, master secret `sk`, or friendly name
+
+---
+
+## What veiled provides
+
+| Property | Status |
+|---|---|
+| CRS with independent generators via HashToCurve | Implemented (Phase 0) |
+| Multi-value Pedersen commitment `Φ = k·g + Σ s_l·h_l + name_scalar·h_name` | Implemented (Phase 0) |
+| HKDF per-verifier nullifier derivation | Implemented (Phase 1) |
+| Public nullifiers `nul_l = s_l · g` | Implemented (Phase 1) |
+| MasterCredential `(Φ, sk, r, k)` | Implemented (Phase 1) |
+| FriendlyName bound in commitment via `h_name` | Implemented (Phase 1) |
+| RegisteredIdentity with frozen anonymity set | Implemented (Phase 2) |
+| Multi-nullifier atomic registration | Implemented (Phase 2) |
+| Bitcoin on-chain anchoring via vtxo-tree | Implemented (Phase 2) |
+| Adapted Bootle/Groth proof for multi-value commitments | Implemented (Phase 3) |
+| Service-specific child credentials and pseudonyms | Implemented (Phase 3) |
+| Composite proof (membership + nullifier authenticity via Schnorr `π_value`) | Implemented (Phase 3) |
+| Automatic cross-service unlinkability | Implemented (Phases 1–3) |
+
 ## What veiled does NOT yet provide
 
 | Property | Status |
 |---|---|
-| Phase 3: Service-specific credential derivation | Planned |
-| Phase 3: Bootle/Groth proof adapted for multi-value commitments | Planned |
-| Phase 3: Single composite proof (membership + nullifier authenticity) | Planned |
 | Phase 4: Full anonymous authentication protocol | Planned |
 | Proof expiry / revocation | Not in scope |
