@@ -73,7 +73,7 @@ pub fn derive_public_nullifier(
 ) -> [u8; 33] {
     let nul = derive_nullifier(master_secret, name);
     let s = bytes_to_scalar(&nul.0);
-    let point = s * *g;
+    let point = *g * s;
     point.to_affine().to_bytes().into()
 }
 

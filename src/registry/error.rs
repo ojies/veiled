@@ -19,6 +19,12 @@ pub enum AppError {
     BadRequest(String),
     /// A requested resource does not exist.
     NotFound,
+    /// The pseudonym has already been registered.
+    PseudonymAlreadyUsed,
+    /// Proof cryptographic verification failed.
+    ProofVerificationFailed,
+    /// The verifier is not configured on this registry instance.
+    VerifierNotConfigured,
 }
 
 impl IntoResponse for AppError {
@@ -47,6 +53,18 @@ impl IntoResponse for AppError {
             AppError::NotFound => (
                 StatusCode::NOT_FOUND,
                 "not found".to_string(),
+            ),
+            AppError::PseudonymAlreadyUsed => (
+                StatusCode::CONFLICT,
+                "pseudonym already registered".to_string(),
+            ),
+            AppError::ProofVerificationFailed => (
+                StatusCode::BAD_REQUEST,
+                "proof verification failed".to_string(),
+            ),
+            AppError::VerifierNotConfigured => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "verifier not configured".to_string(),
             ),
         };
 

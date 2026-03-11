@@ -59,7 +59,7 @@ pub fn derive_pseudonym(
 ) -> [u8; 33] {
     let csk = derive_child_secret_key(child_randomness, name);
     let scalar = bytes_to_scalar(&csk);
-    let point = scalar * *g;
+    let point = *g * scalar;
     point.to_affine().to_bytes().into()
 }
 

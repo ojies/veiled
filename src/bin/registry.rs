@@ -17,7 +17,36 @@ async fn main() {
     info!("database: {db_path}");
     info!("loaded {} set(s), {} nullifier(s)", store.sets.len(), store.nullifiers.len());
 
-    let state = AppState::new(store, db);
+    // If VEILED_USER_INDEX is set, configure Phase 4 verifier mode.
+    // Also requires VEILED_CRS_PROVIDERS (comma-separated list of user names).
+    let state = match (std::env::var("VEILED_USER_INDEX"), std::env::var("VEILED_CRS_PROVIDERS")) {
+        (Ok(idx_str), Ok(providers_str)) => {
+            let user_index: usize = idx_str.parse()
+                .expect("VEILED_USER_INDEX must be a positive integer (1-indexed)");
+            assert!(user_index >= 1, "VEILED_USER_INDEX must be >= 1");
+
+            let providers: Vec<veiled::core::crs::User> = providers_str
+                .split(',')
+                .map(|name| veiled::core::crs::User {
+                    name: veiled::core::types::Name::new(name.trim()),
+                    credential_generator: [0x02; 33],
+                    origin: String::new(),
+                })
+                .collect();
+
+            let crs = veiled::core::crs::Crs::setup(providers);
+            info!("verifier mode: user_index={user_index}, CRS with {} providers", crs.num_providers());
+            AppState::with_verifier(store, db, crs, user_index)
+        }
+        (Ok(_), Err(_)) => {
+            panic!("VEILED_USER_INDEX set but VEILED_CRS_PROVIDERS missing");
+        }
+        _ => {
+            info!("registry-only mode (no verifier)");
+            AppState::new(store, db)
+        }
+    };
+
     let router = build_router(state);
 
     let port = std::env::var("VEILED_PORT").unwrap_or_else(|_| "7271".to_string());

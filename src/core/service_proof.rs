@@ -16,7 +16,7 @@
 //!
 //! Additionally includes π_value: a Schnorr proof that `nul_l = s_l · g`.
 //!
-//! Proof size: `911 + (L+1)×32` bytes.
+//! Proof size: `943 + (L+1)×32` bytes.
 
 use k256::{
     AffinePoint, ProjectivePoint,
@@ -155,7 +155,7 @@ fn schnorr_challenge(
 /// - π_membership: compact Bootle/Groth one-out-of-many proof (A, B, C, D, E, f, z)
 /// - π_value: Schnorr proof that `nul_l = s_l · g` (section 3.7)
 ///
-/// Proof size: `911 + (L+1)×32` bytes where L = number of service providers.
+/// Proof size: `943 + (L+1)×32` bytes where L = number of service providers.
 #[derive(Clone)]
 pub struct ServiceRegistrationProof {
     // ── π_membership: Bootle/Groth one-out-of-many ─────────────────────────
@@ -188,6 +188,12 @@ pub struct ServiceRegistrationProof {
     pub schnorr_r: [u8; 33],
     /// Schnorr response s = t + e·s_l.
     pub schnorr_s: [u8; 32],
+
+    // ── Revealed scalar (embedded in π per spec) ────────────────────────────
+
+    /// The revealed nullifier scalar `s_l` — embedded in π.
+    /// Step 4.6: π_value proves `nul_l = s_l · g`.
+    pub nullifier_scalar: [u8; 32],
 }
 
 // ── prove ───────────────────────────────────────────────────────────────────
@@ -415,26 +421,29 @@ pub fn prove_service_registration(
         z_responses,
         schnorr_r: point_to_bytes(&schnorr_r_point),
         schnorr_s: scalar_to_bytes(&schnorr_s_scalar),
+        nullifier_scalar: nullifier_scalars[service_index - 1].0,
     })
 }
 
 // ── verify ──────────────────────────────────────────────────────────────────
 
-/// Verify a service registration proof.
+/// Verify a service registration proof (steps 4.2–4.6).
 ///
-/// - `crs`: the Common Reference String.
-/// - `anonymity_set`: the full anonymity set.
-/// - `service_index`: which service (1-indexed).
-/// - `nullifier_scalar`: the revealed `s_l`.
-/// - `pseudonym`: `ϕ = csk_l · g` (33-byte compressed point).
-/// - `public_nullifier`: `nul_l = s_l · g` (33-byte compressed point).
-/// - `proof`: the proof to verify.
+/// The verifier (Bob, user `l`) receives `(ϕ, nul_l, π, d̂)` from the
+/// prover (Alice). The proof π contains the nullifier scalar `s_l`
+/// internally, so the verifier does not need it as a separate parameter.
+///
+/// Steps (spec section 4):
+/// - 4.2: Recompute shifted commitments `D_i = Φ_i - s_l · h_l`
+/// - 4.3: Recompute Fiat-Shamir challenge `x`
+/// - 4.4: Verify 10 bitness equations (Check 1 + Check 2)
+/// - 4.5: Verify polynomial identity — O(N) group ops (Schwartz-Zippel)
+/// - 4.6: Verify nullifier correctness — `nul_l = s_l · g` (Schnorr π_value)
 pub fn verify_service_registration(
     crs: &Crs,
     anonymity_set: &[Commitment],
     service_index: usize,
     set_id: u64,
-    nullifier_scalar: &Nullifier,
     pseudonym: &[u8; 33],
     public_nullifier: &[u8; 33],
     proof: &ServiceRegistrationProof,
@@ -454,27 +463,11 @@ pub fn verify_service_registration(
     let g = crs.g;
     let hk = bit_generators();
 
-    // ── Verify nul_l = s_l · g (trivially checkable since s_l is revealed) ───
-    let s_l = bytes_to_scalar(&nullifier_scalar.0);
-    let expected_nul = point_to_bytes(&(g * s_l));
-    if expected_nul != *public_nullifier {
-        return false;
-    }
+    // Extract s_l from the proof (π contains the revealed nullifier scalar).
+    let s_l = bytes_to_scalar(&proof.nullifier_scalar);
 
-    // ── Verify π_value: Schnorr proof that nul_l = s_l · g (section 3.7) ────
-    let schnorr_r = match point_from_bytes(&proof.schnorr_r) { Some(p) => p, None => return false };
-    let schnorr_s = scalar_from_bytes(&proof.schnorr_s);
-    let schnorr_e = schnorr_challenge(&g, public_nullifier, &schnorr_r);
-    let nul_point = match point_from_bytes(public_nullifier) { Some(p) => p, None => return false };
-
-    // Verify: s·g == R + e·nul_l
-    let schnorr_lhs = g * schnorr_s;
-    let schnorr_rhs = schnorr_r + nul_point * schnorr_e;
-    if schnorr_lhs.to_affine() != schnorr_rhs.to_affine() {
-        return false;
-    }
-
-    // ── Compute shifted set D[i] = Φ_i - s_l · h_l (section 3.3) ───────────
+    // ── 4.2 Recompute the Shifted Commitments ───────────────────────────────
+    // D_i = Φ_i - s_l · h_l  for all i = 1..N
     let h_l = *crs.h(service_index);
     let shift = h_l * s_l;
     let d_set: Vec<ProjectivePoint> = anonymity_set
@@ -504,7 +497,8 @@ pub fn verify_service_registration(
     let z_a = scalar_from_bytes(&proof.z_a);
     let z_c = scalar_from_bytes(&proof.z_c);
 
-    // ── Recompute Fiat-Shamir challenge (section 3.5) ───────────────────────
+    // ── 4.3 Recompute the Fiat-Shamir Challenge ────────────────────────────
+    // x = Hash(crs, Λ_{d̂}, d̂, l, nul_l, ϕ, {A,B,C,D}, {E_m})
     let x = fiat_shamir_challenge(
         &g,
         pseudonym,
@@ -516,7 +510,10 @@ pub fn verify_service_registration(
         &cap_e,
     );
 
-    // ── Check 1: z_a·g == A + x·B - Σ_k f[k]·H_k (section 3.6) ───────────
+    // ── 4.4 Verify the Bit Commitments ──────────────────────────────────────
+
+    // Check 1 — Consistency of f_k with A and B:
+    //   z_a·g == A + x·B - Σ_k f[k]·H_k
     let lhs1 = g * z_a;
     let mut rhs1 = cap_a + cap_b * x;
     for k in 0..M {
@@ -526,9 +523,9 @@ pub fn verify_service_registration(
         return false;
     }
 
-    // ── Check 2: z_c·g == x·C + D - Σ_k (f[k]*(x-f[k]))·H_k ──────────────
-    // Bitness check: f_k·(x-f_k) = j_k(1-j_k)·x^2 + a_k(1-2j_k)·x - a_k^2
-    // Only holds if j_k ∈ {0,1} (spec section 3.6).
+    // Check 2 — Bitness: f_k·(x - f_k) = j_k(1-j_k)·x² + ...
+    //   z_c·g == x·C + D - Σ_k (f[k]*(x-f[k]))·H_k
+    // Only holds if j_k ∈ {0,1} — by Schwartz-Zippel over random x.
     let lhs2 = g * z_c;
     let mut rhs2 = cap_c * x + cap_d;
     for k in 0..M {
@@ -538,8 +535,13 @@ pub fn verify_service_registration(
         return false;
     }
 
-    // ── Check 3: Σ_j p_j(x)·D_j == z_g·g + Σ_{m≠l} z_m·h_m + Σ_k x^k·E[k]
-    // Multi-generator polynomial evaluation check (section 3.4/3.6 adapted).
+    // ── 4.5 Verify the Polynomial Identity ──────────────────────────────────
+    // Membership check — O(N) group operations:
+    //   Σ_j p_j(x)·D_j == z_g·g + Σ_{m≠l} z_m·h_m + z_name·h_name + Σ_k x^k·E[k]
+    //
+    // Where p_j(x) = Π_k f_{k,j_k}(x) with f_{k,1}=f_k and f_{k,0}=x-f_k.
+    // By Schwartz-Zippel: if this holds for random x, the polynomial identity
+    // holds formally, proving D_j is a commitment-to-zero at the prover's index.
     let mut lhs3 = ProjectivePoint::IDENTITY;
     for j in 0..N {
         let mut pj = Scalar::ONE;
@@ -554,7 +556,7 @@ pub fn verify_service_registration(
         lhs3 += d_set[j] * pj;
     }
 
-    // RHS: z_g·g + Σ_{m≠l} z_m·h_m + Σ_k x^k·E[k]
+    // RHS: z_g·g + Σ_{m≠l} z_m·h_m + z_name·h_name + Σ_k x^k·E[k]
     let mut rhs3 = ProjectivePoint::IDENTITY;
 
     // z_g · g
@@ -582,7 +584,118 @@ pub fn verify_service_registration(
         x_pow = x_pow * x;
     }
 
-    lhs3.to_affine() == rhs3.to_affine()
+    if lhs3.to_affine() != rhs3.to_affine() {
+        return false;
+    }
+
+    // ── 4.6 Verify Nullifier Correctness ────────────────────────────────────
+    // Direct check: nul_l = s_l · g
+    let expected_nul = point_to_bytes(&(g * s_l));
+    if expected_nul != *public_nullifier {
+        return false;
+    }
+
+    // Schnorr π_value: proves knowledge of s_l such that nul_l = s_l · g.
+    // Verify: s·g == R + e·nul_l
+    let schnorr_r = match point_from_bytes(&proof.schnorr_r) { Some(p) => p, None => return false };
+    let schnorr_s = scalar_from_bytes(&proof.schnorr_s);
+    let schnorr_e = schnorr_challenge(&g, public_nullifier, &schnorr_r);
+    let nul_point = match point_from_bytes(public_nullifier) { Some(p) => p, None => return false };
+
+    let schnorr_lhs = g * schnorr_s;
+    let schnorr_rhs = schnorr_r + nul_point * schnorr_e;
+    schnorr_lhs.to_affine() == schnorr_rhs.to_affine()
+}
+
+// ── proof serialization ─────────────────────────────────────────────────────
+//
+// Layout (byte offsets):
+//   0..132   a, b, c, d         (4 × 33 bytes)
+// 132..462   e_poly[0..9]       (10 × 33 bytes)
+// 462..782   f[0..9]            (10 × 32 bytes)
+// 782..814   z_a                (32 bytes)
+// 814..846   z_c                (32 bytes)
+// 846..879   schnorr_r          (33 bytes)
+// 879..911   schnorr_s          (32 bytes)
+// 911..943   nullifier_scalar   (32 bytes)
+// 943..end   z_responses        ((L+1) × 32 bytes)
+//
+// Fixed portion: 943 bytes. Total: 943 + (L+1)×32.
+
+/// Serialize a `ServiceRegistrationProof` to bytes.
+pub fn serialize_service_proof(proof: &ServiceRegistrationProof) -> Vec<u8> {
+    let z_len = proof.z_responses.len() * 32;
+    let mut buf = Vec::with_capacity(943 + z_len);
+
+    buf.extend_from_slice(&proof.a);
+    buf.extend_from_slice(&proof.b);
+    buf.extend_from_slice(&proof.c);
+    buf.extend_from_slice(&proof.d);
+    for e in &proof.e_poly {
+        buf.extend_from_slice(e);
+    }
+    for fi in &proof.f {
+        buf.extend_from_slice(fi);
+    }
+    buf.extend_from_slice(&proof.z_a);
+    buf.extend_from_slice(&proof.z_c);
+    buf.extend_from_slice(&proof.schnorr_r);
+    buf.extend_from_slice(&proof.schnorr_s);
+    buf.extend_from_slice(&proof.nullifier_scalar);
+    for z in &proof.z_responses {
+        buf.extend_from_slice(z);
+    }
+
+    buf
+}
+
+/// Deserialize a `ServiceRegistrationProof` from bytes.
+///
+/// The variable-length `z_responses` portion must be a multiple of 32 bytes.
+pub fn deserialize_service_proof(b: &[u8]) -> Result<ServiceRegistrationProof, String> {
+    if b.len() < 943 {
+        return Err(format!("proof too short: {} bytes (minimum 943)", b.len()));
+    }
+    let z_bytes = b.len() - 943;
+    if z_bytes % 32 != 0 {
+        return Err(format!("z_responses portion ({z_bytes} bytes) not a multiple of 32"));
+    }
+
+    let mut e_poly = [[0u8; 33]; M];
+    for (k, slot) in e_poly.iter_mut().enumerate() {
+        let start = 132 + k * 33;
+        slot.copy_from_slice(&b[start..start + 33]);
+    }
+
+    let mut f = [[0u8; 32]; M];
+    for (k, slot) in f.iter_mut().enumerate() {
+        let start = 462 + k * 32;
+        slot.copy_from_slice(&b[start..start + 32]);
+    }
+
+    let z_count = z_bytes / 32;
+    let mut z_responses = Vec::with_capacity(z_count);
+    for i in 0..z_count {
+        let start = 943 + i * 32;
+        let mut z = [0u8; 32];
+        z.copy_from_slice(&b[start..start + 32]);
+        z_responses.push(z);
+    }
+
+    Ok(ServiceRegistrationProof {
+        a:  b[  0.. 33].try_into().unwrap(),
+        b:  b[ 33.. 66].try_into().unwrap(),
+        c:  b[ 66.. 99].try_into().unwrap(),
+        d:  b[ 99..132].try_into().unwrap(),
+        e_poly,
+        f,
+        z_a: b[782..814].try_into().unwrap(),
+        z_c: b[814..846].try_into().unwrap(),
+        schnorr_r: b[846..879].try_into().unwrap(),
+        schnorr_s: b[879..911].try_into().unwrap(),
+        nullifier_scalar: b[911..943].try_into().unwrap(),
+        z_responses,
+    })
 }
 
 // ── tests ───────────────────────────────────────────────────────────────────
@@ -671,7 +784,6 @@ mod tests {
                 &set,
                 service_index,
                 TEST_SET_ID,
-                &all_nullifiers[service_index - 1],
                 &pseudonym,
                 &pub_nul,
                 &proof,
@@ -697,16 +809,18 @@ mod tests {
         )
         .unwrap();
 
-        // Use wrong nullifier scalar
-        let wrong_nul = Nullifier([0xFF; 32]);
+        // The nullifier_scalar is now embedded in the proof.
+        // Tamper with it to simulate a wrong nullifier scalar.
+        let mut tampered_proof = proof;
+        tampered_proof.nullifier_scalar = [0xFF; 32];
         let wrong_pub = derive_public_nullifier(
             &MasterSecret([0xFF; 32]),
             &crs.providers[0].name,
             &crs.g,
         );
         assert!(!verify_service_registration(
-            &crs, &set, service_index, TEST_SET_ID, &wrong_nul,
-            &pseudonym, &wrong_pub, &proof,
+            &crs, &set, service_index, TEST_SET_ID,
+            &pseudonym, &wrong_pub, &tampered_proof,
         ));
     }
 
@@ -729,10 +843,9 @@ mod tests {
 
         // Verify at different service index — should fail
         let other_service = 2;
-        let other_nul_scalar = &all_nullifiers[other_service - 1];
         let other_pub_nul = cred.public_nullifier(&crs, other_service);
         assert!(!verify_service_registration(
-            &crs, &set, other_service, TEST_SET_ID, other_nul_scalar,
+            &crs, &set, other_service, TEST_SET_ID,
             &pseudonym, &other_pub_nul, &proof,
         ));
     }
@@ -759,7 +872,6 @@ mod tests {
 
         assert!(!verify_service_registration(
             &crs, &set, service_index, TEST_SET_ID,
-            &all_nullifiers[service_index - 1],
             &pseudonym, &pub_nul, &proof,
         ));
     }
@@ -786,11 +898,13 @@ mod tests {
         //   = 132 + 330 + 320 + 64 = 846
         // π_membership variable: (L+1)×32 (z_responses: g + L-1 h_{m≠l} + h_name)
         // π_value: 33 (schnorr_r) + 32 (schnorr_s) = 65
-        // Total: 911 + (L+1)×32
-        let expected = 911 + (l_count + 1) * 32;
+        // nullifier_scalar: 32
+        // Total: 943 + (L+1)×32
+        let expected = 943 + (l_count + 1) * 32;
         let actual = 4 * 33 + M * 33 + M * 32 + 2 * 32
             + proof.z_responses.len() * 32
-            + 33 + 32; // schnorr_r + schnorr_s
+            + 33 + 32  // schnorr_r + schnorr_s
+            + 32;      // nullifier_scalar
         assert_eq!(actual, expected);
         assert_eq!(proof.z_responses.len(), l_count + 1);
     }

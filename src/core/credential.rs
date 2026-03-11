@@ -198,13 +198,13 @@ impl RegisteredIdentity {
     ///
     /// Generates the full service registration message:
     /// ```text
-    /// (ϕ, nul_l, s_l, π, d̂)
+    /// (ϕ, nul_l, π, d̂)
     /// ```
     ///
     /// - `service_index`: 1-indexed service provider in the CRS.
     ///
     /// Returns a `ServiceRegistration` containing the pseudonym, public
-    /// nullifier, revealed nullifier scalar, and the adapted Bootle proof.
+    /// nullifier, and the adapted Bootle proof (which embeds `s_l`).
     pub fn register_for_service(
         &self,
         crs: &Crs,
@@ -239,7 +239,6 @@ impl RegisteredIdentity {
         Ok(ServiceRegistration {
             pseudonym,
             public_nullifier: pub_nul,
-            nullifier_scalar: all_nullifiers[service_index - 1],
             set_id: self.set_id,
             service_index,
             proof,
@@ -247,23 +246,24 @@ impl RegisteredIdentity {
     }
 }
 
-/// The message sent from a prover to a service provider during Phase 3.
+/// The message sent from a prover to a verifier during Phase 3.
 ///
 /// ```text
-/// (ϕ, nul_l, s_l, π, d̂)
+/// (ϕ, nul_l, π, d̂)
 /// ```
+///
+/// The nullifier scalar `s_l` is embedded inside π (self-contained proof).
 pub struct ServiceRegistration {
     /// Pseudonym `ϕ = csk_l · g` — the user's public identity at this service.
     pub pseudonym: [u8; 33],
     /// Public nullifier `nul_l = s_l · g` — Sybil resistance token.
     pub public_nullifier: [u8; 33],
-    /// Revealed nullifier scalar `s_l` — needed by verifier to compute shifted set.
-    pub nullifier_scalar: Nullifier,
     /// `d̂` — which anonymity set the user is in.
     pub set_id: u64,
     /// Which service this registration is for (1-indexed).
     pub service_index: usize,
     /// The adapted Bootle/Groth membership proof over shifted commitments.
+    /// Contains the embedded nullifier scalar `s_l`.
     pub proof: crate::core::service_proof::ServiceRegistrationProof,
 }
 
@@ -280,7 +280,6 @@ pub fn verify_service_registration_message(
         anonymity_set,
         reg.service_index,
         reg.set_id,
-        &reg.nullifier_scalar,
         &reg.pseudonym,
         &reg.public_nullifier,
         &reg.proof,
@@ -523,7 +522,6 @@ mod tests {
         let mut replayed = ServiceRegistration {
             pseudonym: service_reg.pseudonym,
             public_nullifier: service_reg.public_nullifier,
-            nullifier_scalar: service_reg.nullifier_scalar,
             set_id: service_reg.set_id,
             service_index: 1, // wrong service
             proof: service_reg.proof.clone(),
