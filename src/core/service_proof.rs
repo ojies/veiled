@@ -16,7 +16,7 @@
 //!
 //! Additionally includes π_value: a Schnorr proof that `nul_l = s_l · g`.
 //!
-//! Proof size: `943 + (L+1)×32` bytes.
+//! Proof size: `975 + (L+1)×32` bytes.
 
 use k256::{
     AffinePoint, ProjectivePoint,
@@ -97,6 +97,7 @@ fn fiat_shamir_challenge(
     public_nullifier: &[u8; 33],
     service_index: usize,
     set_id: u64,
+    name_scalar: &[u8; 32],
     d_set: &[ProjectivePoint],
     a: &ProjectivePoint,
     b: &ProjectivePoint,
@@ -111,6 +112,7 @@ fn fiat_shamir_challenge(
     hasher.update(public_nullifier);      // nul_l
     hasher.update(&(service_index as u64).to_be_bytes()); // l
     hasher.update(&set_id.to_be_bytes()); // d̂
+    hasher.update(name_scalar);           // bind revealed name
     for di in d_set {
         hasher.update(point_to_bytes(di));
     }
@@ -155,7 +157,7 @@ fn schnorr_challenge(
 /// - π_membership: compact Bootle/Groth one-out-of-many proof (A, B, C, D, E, f, z)
 /// - π_value: Schnorr proof that `nul_l = s_l · g` (section 3.7)
 ///
-/// Proof size: `943 + (L+1)×32` bytes where L = number of service providers.
+/// Proof size: `975 + (L+1)×32` bytes where L = number of service providers.
 #[derive(Clone)]
 pub struct ServiceRegistrationProof {
     // ── π_membership: Bootle/Groth one-out-of-many ─────────────────────────
@@ -194,6 +196,13 @@ pub struct ServiceRegistrationProof {
     /// The revealed nullifier scalar `s_l` — embedded in π.
     /// Step 4.6: π_value proves `nul_l = s_l · g`.
     pub nullifier_scalar: [u8; 32],
+
+    // ── Revealed name (bound via Fiat-Shamir) ────────────────────────────────
+
+    /// The name scalar `SHA256(friendly_name)` — bound to the proof via
+    /// Fiat-Shamir. If the prover lies about the name, the challenge changes
+    /// and the proof fails.
+    pub name_scalar: [u8; 32],
 }
 
 // ── prove ───────────────────────────────────────────────────────────────────
@@ -357,6 +366,7 @@ pub fn prove_service_registration(
         public_nullifier,
         service_index,
         set_id,
+        name_scalar,
         &d_set,
         &cap_a, &cap_b, &cap_c, &cap_d,
         &cap_e,
@@ -422,6 +432,7 @@ pub fn prove_service_registration(
         schnorr_r: point_to_bytes(&schnorr_r_point),
         schnorr_s: scalar_to_bytes(&schnorr_s_scalar),
         nullifier_scalar: nullifier_scalars[service_index - 1].0,
+        name_scalar: *name_scalar,
     })
 }
 
@@ -498,13 +509,14 @@ pub fn verify_service_registration(
     let z_c = scalar_from_bytes(&proof.z_c);
 
     // ── 4.3 Recompute the Fiat-Shamir Challenge ────────────────────────────
-    // x = Hash(crs, Λ_{d̂}, d̂, l, nul_l, ϕ, {A,B,C,D}, {E_m})
+    // x = Hash(crs, Λ_{d̂}, d̂, l, nul_l, ϕ, name_scalar, {A,B,C,D}, {E_m})
     let x = fiat_shamir_challenge(
         &g,
         pseudonym,
         public_nullifier,
         service_index,
         set_id,
+        &proof.name_scalar,
         &d_set,
         &cap_a, &cap_b, &cap_c, &cap_d,
         &cap_e,
@@ -618,14 +630,15 @@ pub fn verify_service_registration(
 // 846..879   schnorr_r          (33 bytes)
 // 879..911   schnorr_s          (32 bytes)
 // 911..943   nullifier_scalar   (32 bytes)
-// 943..end   z_responses        ((L+1) × 32 bytes)
+// 943..975   name_scalar        (32 bytes)
+// 975..end   z_responses        ((L+1) × 32 bytes)
 //
-// Fixed portion: 943 bytes. Total: 943 + (L+1)×32.
+// Fixed portion: 975 bytes. Total: 975 + (L+1)×32.
 
 /// Serialize a `ServiceRegistrationProof` to bytes.
 pub fn serialize_service_proof(proof: &ServiceRegistrationProof) -> Vec<u8> {
     let z_len = proof.z_responses.len() * 32;
-    let mut buf = Vec::with_capacity(943 + z_len);
+    let mut buf = Vec::with_capacity(975 + z_len);
 
     buf.extend_from_slice(&proof.a);
     buf.extend_from_slice(&proof.b);
@@ -642,6 +655,7 @@ pub fn serialize_service_proof(proof: &ServiceRegistrationProof) -> Vec<u8> {
     buf.extend_from_slice(&proof.schnorr_r);
     buf.extend_from_slice(&proof.schnorr_s);
     buf.extend_from_slice(&proof.nullifier_scalar);
+    buf.extend_from_slice(&proof.name_scalar);
     for z in &proof.z_responses {
         buf.extend_from_slice(z);
     }
@@ -653,10 +667,10 @@ pub fn serialize_service_proof(proof: &ServiceRegistrationProof) -> Vec<u8> {
 ///
 /// The variable-length `z_responses` portion must be a multiple of 32 bytes.
 pub fn deserialize_service_proof(b: &[u8]) -> Result<ServiceRegistrationProof, String> {
-    if b.len() < 943 {
-        return Err(format!("proof too short: {} bytes (minimum 943)", b.len()));
+    if b.len() < 975 {
+        return Err(format!("proof too short: {} bytes (minimum 975)", b.len()));
     }
-    let z_bytes = b.len() - 943;
+    let z_bytes = b.len() - 975;
     if z_bytes % 32 != 0 {
         return Err(format!("z_responses portion ({z_bytes} bytes) not a multiple of 32"));
     }
@@ -676,7 +690,7 @@ pub fn deserialize_service_proof(b: &[u8]) -> Result<ServiceRegistrationProof, S
     let z_count = z_bytes / 32;
     let mut z_responses = Vec::with_capacity(z_count);
     for i in 0..z_count {
-        let start = 943 + i * 32;
+        let start = 975 + i * 32;
         let mut z = [0u8; 32];
         z.copy_from_slice(&b[start..start + 32]);
         z_responses.push(z);
@@ -694,6 +708,7 @@ pub fn deserialize_service_proof(b: &[u8]) -> Result<ServiceRegistrationProof, S
         schnorr_r: b[846..879].try_into().unwrap(),
         schnorr_s: b[879..911].try_into().unwrap(),
         nullifier_scalar: b[911..943].try_into().unwrap(),
+        name_scalar: b[943..975].try_into().unwrap(),
         z_responses,
     })
 }
@@ -898,13 +913,14 @@ mod tests {
         //   = 132 + 330 + 320 + 64 = 846
         // π_membership variable: (L+1)×32 (z_responses: g + L-1 h_{m≠l} + h_name)
         // π_value: 33 (schnorr_r) + 32 (schnorr_s) = 65
-        // nullifier_scalar: 32
-        // Total: 943 + (L+1)×32
-        let expected = 943 + (l_count + 1) * 32;
+        // nullifier_scalar: 32, name_scalar: 32
+        // Total: 975 + (L+1)×32
+        let expected = 975 + (l_count + 1) * 32;
         let actual = 4 * 33 + M * 33 + M * 32 + 2 * 32
             + proof.z_responses.len() * 32
             + 33 + 32  // schnorr_r + schnorr_s
-            + 32;      // nullifier_scalar
+            + 32       // nullifier_scalar
+            + 32;      // name_scalar
         assert_eq!(actual, expected);
         assert_eq!(proof.z_responses.len(), l_count + 1);
     }

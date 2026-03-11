@@ -7,10 +7,11 @@ use crate::registry::{error::AppError, server::AppState};
 
 /// `POST /api/v1/verify-registration`
 ///
-/// Body: `{ "pseudonym": "<66 hex>", "public_nullifier": "<66 hex>", "proof": "<hex>", "set_id": 0 }`
+/// Body: `{ "pseudonym": "<hex>", "public_nullifier": "<hex>", "proof": "<hex>",
+///          "set_id": 0, "friendly_name": "bob" }`
 ///
-/// Phase 4 endpoint: Bob (verifier) receives `(ϕ, nul_l, π, d̂)` from Alice
-/// and runs steps 4.1–4.8.
+/// Phase 4 endpoint: Bob (verifier) receives `(ϕ, nul_l, π, d̂, friendly_name)`
+/// from Alice and runs steps 4.1–4.8 including name verification.
 #[derive(Deserialize)]
 pub struct VerifyRegistrationRequest {
     /// Hex-encoded 33-byte pseudonym `ϕ = csk_l · g`.
@@ -21,6 +22,9 @@ pub struct VerifyRegistrationRequest {
     pub proof: String,
     /// Which anonymity set to verify against.
     pub set_id: u64,
+    /// The prover's revealed friendly name — verifier checks
+    /// `SHA256(friendly_name) == proof.name_scalar`.
+    pub friendly_name: String,
 }
 
 #[derive(Serialize)]
@@ -28,6 +32,7 @@ pub struct VerifyRegistrationResponse {
     pub registered: bool,
     pub pseudonym: String,
     pub public_nullifier: String,
+    pub friendly_name: String,
 }
 
 pub async fn verify_registration(
@@ -76,20 +81,29 @@ pub async fn verify_registration(
         }
     }
 
-    // Run steps 4.1–4.8.
+    // Run steps 4.1–4.8 including name verification.
     let mut vs = verifier_lock.write().await;
-    match vs.verify_and_register(crs, &pseudonym_bytes, &pub_nul_bytes, &proof, body.set_id) {
+    match vs.verify_and_register(
+        crs,
+        &pseudonym_bytes,
+        &pub_nul_bytes,
+        &proof,
+        body.set_id,
+        &body.friendly_name,
+    ) {
         Ok(result) => Ok((
             StatusCode::OK,
             Json(VerifyRegistrationResponse {
                 registered: true,
                 pseudonym: hex::encode(result.pseudonym),
                 public_nullifier: hex::encode(result.public_nullifier),
+                friendly_name: result.friendly_name,
             }),
         )),
         Err(VerificationError::SetNotFound(id)) => Err(AppError::SetNotFound(id)),
         Err(VerificationError::ProofInvalid) => Err(AppError::ProofVerificationFailed),
         Err(VerificationError::NullifierAlreadyUsed) => Err(AppError::NullifierAlreadyUsed),
         Err(VerificationError::PseudonymAlreadyUsed) => Err(AppError::PseudonymAlreadyUsed),
+        Err(VerificationError::NameMismatch) => Err(AppError::ProofVerificationFailed),
     }
 }

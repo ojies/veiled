@@ -35,6 +35,8 @@ pub enum VerificationError {
     NullifierAlreadyUsed,
     /// 4.7: pseudonym already registered.
     PseudonymAlreadyUsed,
+    /// Name revelation failed — SHA256(friendly_name) ≠ proof.name_scalar.
+    NameMismatch,
 }
 
 /// Result of a successful verification + registration (step 4.8).
@@ -42,6 +44,7 @@ pub enum VerificationError {
 pub struct RegistrationResult {
     pub pseudonym: [u8; 33],
     pub public_nullifier: [u8; 33],
+    pub friendly_name: String,
 }
 
 // ── verifier state ──────────────────────────────────────────────────────────
@@ -120,7 +123,7 @@ impl VerifierState {
 
     /// Steps 4.1–4.8: Verify a proof and register the pseudonym.
     ///
-    /// Bob receives `(ϕ, nul_l, π, d̂)` from Alice:
+    /// Bob receives `(ϕ, nul_l, π, d̂, friendly_name)` from Alice:
     ///
     /// - 4.1  Fetch `Λ_{d̂}` from cache
     /// - 4.2  Recompute `D_1..D_N` (inside `verify_service_registration`)
@@ -128,6 +131,7 @@ impl VerifierState {
     /// - 4.4  Verify 10 × bitness equations
     /// - 4.5  Verify polynomial identity (O(N) group ops)
     /// - 4.6  Verify nullifier correctness (Schnorr π_value)
+    /// - 4.6b Verify name revelation — `SHA256(friendly_name) == proof.name_scalar`
     /// - 4.7  Check `nul_l` not in nullifier list, `ϕ` not in pseudonym list
     /// - 4.8  Store `(ϕ, nul_l)`, return "Registered"
     pub fn verify_and_register(
@@ -137,6 +141,7 @@ impl VerifierState {
         public_nullifier: &[u8; 33],
         proof: &ServiceRegistrationProof,
         set_id: u64,
+        friendly_name: &str,
     ) -> Result<RegistrationResult, VerificationError> {
         // 4.1: Fetch anonymity set from cache.
         let anonymity_set = self
@@ -159,6 +164,12 @@ impl VerifierState {
             return Err(VerificationError::ProofInvalid);
         }
 
+        // 4.6b: Verify name revelation — SHA256(friendly_name) must match
+        // the name_scalar embedded in the proof (bound via Fiat-Shamir).
+        if !crate::core::payment::verify_name_revelation(&proof.name_scalar, friendly_name) {
+            return Err(VerificationError::NameMismatch);
+        }
+
         // 4.7: Check freshness — no duplicate nullifiers or pseudonyms.
         self.check_freshness(pseudonym, public_nullifier)?;
 
@@ -169,6 +180,7 @@ impl VerifierState {
         Ok(RegistrationResult {
             pseudonym: *pseudonym,
             public_nullifier: *public_nullifier,
+            friendly_name: friendly_name.to_string(),
         })
     }
 }
@@ -229,6 +241,7 @@ mod tests {
     }
 
     /// Helper: generate a valid proof for user at `target_pos` registering with `service_index`.
+    /// Returns (proof, pseudonym, pub_nul, friendly_name).
     fn make_valid_proof(
         crs: &Crs,
         cred: &MasterCredential,
@@ -236,7 +249,7 @@ mod tests {
         target_pos: usize,
         service_index: usize,
         set_id: u64,
-    ) -> (ServiceRegistrationProof, [u8; 33], [u8; 33]) {
+    ) -> (ServiceRegistrationProof, [u8; 33], [u8; 33], String) {
         let all_nullifiers = cred.all_nullifier_scalars(crs);
         let pseudonym = derive_pseudonym(&cred.r, &crs.providers[service_index - 1].name, &crs.g);
         let pub_nul = cred.public_nullifier(crs, service_index);
@@ -255,7 +268,7 @@ mod tests {
         )
         .expect("proof generation should succeed");
 
-        (proof, pseudonym, pub_nul)
+        (proof, pseudonym, pub_nul, cred.friendly_name.as_str().to_string())
     }
 
     // ── 1. new_verifier_state ───────────────────────────────────────────────
@@ -328,18 +341,19 @@ mod tests {
         let target_pos = 42;
 
         let (cred, set) = make_full_set(&crs, 0xAA, target_pos);
-        let (proof, pseudonym, pub_nul) =
+        let (proof, pseudonym, pub_nul, fname) =
             make_valid_proof(&crs, &cred, &set, target_pos, service_index, TEST_SET_ID);
 
         let mut vs = VerifierState::new(service_index);
         vs.cache_set(TEST_SET_ID, set);
 
         let result = vs
-            .verify_and_register(&crs, &pseudonym, &pub_nul, &proof, TEST_SET_ID)
+            .verify_and_register(&crs, &pseudonym, &pub_nul, &proof, TEST_SET_ID, &fname)
             .expect("valid proof should register");
 
         assert_eq!(result.pseudonym, pseudonym);
         assert_eq!(result.public_nullifier, pub_nul);
+        assert_eq!(result.friendly_name, fname);
         assert_eq!(vs.registered_count(), 1);
         assert!(vs.has_nullifier(&pub_nul));
         assert!(vs.has_pseudonym(&pseudonym));
@@ -354,18 +368,18 @@ mod tests {
         let target_pos = 42;
 
         let (cred, set) = make_full_set(&crs, 0xAA, target_pos);
-        let (proof, pseudonym, pub_nul) =
+        let (proof, pseudonym, pub_nul, fname) =
             make_valid_proof(&crs, &cred, &set, target_pos, service_index, TEST_SET_ID);
 
         let mut vs = VerifierState::new(service_index);
         vs.cache_set(TEST_SET_ID, set);
 
         // First registration succeeds.
-        assert!(vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, TEST_SET_ID).is_ok());
+        assert!(vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, TEST_SET_ID, &fname).is_ok());
 
         // Same proof again — nullifier already used.
         assert_eq!(
-            vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, TEST_SET_ID),
+            vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, TEST_SET_ID, &fname),
             Err(VerificationError::NullifierAlreadyUsed)
         );
     }
@@ -377,14 +391,14 @@ mod tests {
         let crs = make_crs(3);
         let service_index = 1;
         let (cred, set) = make_full_set(&crs, 0xBB, 10);
-        let (proof, pseudonym, pub_nul) =
+        let (proof, pseudonym, pub_nul, fname) =
             make_valid_proof(&crs, &cred, &set, 10, service_index, 99);
 
         let mut vs = VerifierState::new(service_index);
         // Do NOT cache set 99.
 
         assert_eq!(
-            vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, 99),
+            vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, 99, &fname),
             Err(VerificationError::SetNotFound(99))
         );
     }
@@ -398,7 +412,7 @@ mod tests {
         let target_pos = 10;
 
         let (cred, set) = make_full_set(&crs, 0xCC, target_pos);
-        let (mut proof, pseudonym, pub_nul) =
+        let (mut proof, pseudonym, pub_nul, fname) =
             make_valid_proof(&crs, &cred, &set, target_pos, service_index, TEST_SET_ID);
 
         // Tamper with the proof.
@@ -408,7 +422,7 @@ mod tests {
         vs.cache_set(TEST_SET_ID, set);
 
         assert_eq!(
-            vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, TEST_SET_ID),
+            vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, TEST_SET_ID, &fname),
             Err(VerificationError::ProofInvalid)
         );
     }
@@ -422,7 +436,7 @@ mod tests {
 
         let (cred, set) = make_full_set(&crs, 0xDD, target_pos);
         // Proof generated for user 2.
-        let (proof, pseudonym, pub_nul) =
+        let (proof, pseudonym, pub_nul, fname) =
             make_valid_proof(&crs, &cred, &set, target_pos, 2, TEST_SET_ID);
 
         // Verifier claims to be user 1 — mismatch.
@@ -430,8 +444,36 @@ mod tests {
         vs.cache_set(TEST_SET_ID, set);
 
         assert_eq!(
-            vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, TEST_SET_ID),
+            vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, TEST_SET_ID, &fname),
             Err(VerificationError::ProofInvalid)
+        );
+    }
+
+    // ── 11. verify_and_register_wrong_name ──────────────────────────────────
+
+    #[test]
+    fn verify_and_register_wrong_name() {
+        let crs = make_crs(3);
+        let service_index = 1;
+        let target_pos = 10;
+
+        let (cred, set) = make_full_set(&crs, 0xEE, target_pos);
+        let (proof, pseudonym, pub_nul, _fname) =
+            make_valid_proof(&crs, &cred, &set, target_pos, service_index, TEST_SET_ID);
+
+        let mut vs = VerifierState::new(service_index);
+        vs.cache_set(TEST_SET_ID, set);
+
+        // Wrong name — proof.name_scalar was SHA256("user-ee"), not SHA256("impostor").
+        // The proof still passes crypto checks (4.2–4.6) because name_scalar
+        // is bound via Fiat-Shamir: it was used during prove, so verify
+        // reproduces the same challenge. But verify_name_revelation fails.
+        // Wait — actually, if we pass a wrong name, the Fiat-Shamir check is
+        // with the PROOF's embedded name_scalar, which is the real one. So
+        // crypto checks pass. Then 4.6b catches the name mismatch.
+        assert_eq!(
+            vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, TEST_SET_ID, "impostor"),
+            Err(VerificationError::NameMismatch)
         );
     }
 }

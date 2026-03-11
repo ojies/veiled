@@ -241,6 +241,7 @@ impl RegisteredIdentity {
             public_nullifier: pub_nul,
             set_id: self.set_id,
             service_index,
+            friendly_name: self.credential.friendly_name.as_str().to_string(),
             proof,
         })
     }
@@ -249,10 +250,11 @@ impl RegisteredIdentity {
 /// The message sent from a prover to a verifier during Phase 3.
 ///
 /// ```text
-/// (ϕ, nul_l, π, d̂)
+/// (ϕ, nul_l, π, d̂, friendly_name)
 /// ```
 ///
-/// The nullifier scalar `s_l` is embedded inside π (self-contained proof).
+/// The nullifier scalar `s_l` and name scalar `SHA256(friendly_name)` are
+/// embedded inside π (self-contained proof).
 pub struct ServiceRegistration {
     /// Pseudonym `ϕ = csk_l · g` — the user's public identity at this service.
     pub pseudonym: [u8; 33],
@@ -262,8 +264,11 @@ pub struct ServiceRegistration {
     pub set_id: u64,
     /// Which service this registration is for (1-indexed).
     pub service_index: usize,
+    /// The prover's revealed friendly name — verifier checks
+    /// `SHA256(friendly_name) == proof.name_scalar`.
+    pub friendly_name: String,
     /// The adapted Bootle/Groth membership proof over shifted commitments.
-    /// Contains the embedded nullifier scalar `s_l`.
+    /// Contains the embedded nullifier scalar `s_l` and name scalar.
     pub proof: crate::core::service_proof::ServiceRegistrationProof,
 }
 
@@ -524,6 +529,7 @@ mod tests {
             public_nullifier: service_reg.public_nullifier,
             set_id: service_reg.set_id,
             service_index: 1, // wrong service
+            friendly_name: service_reg.friendly_name.clone(),
             proof: service_reg.proof.clone(),
         };
         assert!(!verify_service_registration_message(&crs, &anonymity_set, &replayed));
