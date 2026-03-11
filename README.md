@@ -1,7 +1,7 @@
 # Veiled
 
 An anonymous credential system on **Bitcoin**, implementing the
-[Anonymous Self-Credentials (ASC)](annomymous-credential.pdf) protocol
+[Anonymous Self-Credentials (ASC)](docs/annomymous-credential.pdf) protocol
 with a Common Reference String (CRS) and Bootle/Groth one-out-of-many proofs.
 
 Users generate a master credential locally and register a multi-value Pedersen
@@ -9,8 +9,8 @@ commitment on a public identity registry backed by Bitcoin vtxo-trees.
 Service providers can verify that a user is a unique, legitimate member of an
 anonymity set — without being able to link that user across different services.
 
-See [SCENARIO.md](SCENARIO.md) for a concrete end-to-end walkthrough.
-See [ASC_COMPARISON.md](ASC_COMPARISON.md) for a detailed comparison between
+See [SCENARIO.md](docs/SCENARIO.md) for a concrete end-to-end walkthrough.
+See [ASC_COMPARISON.md](docs/ASC_COMPARISON.md) for a detailed comparison between
 veiled's implementation and the ASC paper protocol.
 
 ---
