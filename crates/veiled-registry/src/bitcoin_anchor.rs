@@ -171,7 +171,8 @@ mod tests {
             let secret = MasterSecret([seed; 32]);
             let blinding = BlindingKey([seed.wrapping_add(100); 32]);
             let nullifiers = derive_all_nullifiers(&secret, &crs.usernames());
-            let phi = crs.commit_master_identity(&nullifiers, &blinding).unwrap();
+            let name_scalar = veiled_core::FriendlyName::new(format!("user-{seed}")).to_scalar_bytes();
+            let phi = crs.commit_master_identity(&nullifiers, &blinding, &name_scalar).unwrap();
             set.push(phi);
         }
         assert!(set.is_full());

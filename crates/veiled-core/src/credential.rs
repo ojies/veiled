@@ -23,7 +23,7 @@ use sha2::Sha256;
 
 use crate::crs::Crs;
 use crate::nullifier_v2::{derive_all_nullifiers, derive_nullifier, derive_public_nullifier};
-use crate::types::{BlindingKey, ChildRandomness, Commitment, MasterSecret, Name, Nullifier};
+use crate::types::{BlindingKey, ChildRandomness, Commitment, FriendlyName, MasterSecret, Name, Nullifier};
 
 /// The master credential tuple `(Φ, sk, r, k)`.
 ///
@@ -41,6 +41,8 @@ pub struct MasterCredential {
     pub r: ChildRandomness,
     /// Pedersen blinding key (hides the commitment).
     pub k: BlindingKey,
+    /// User-chosen global friendly name, committed inside Φ via `name_scalar · h_name`.
+    pub friendly_name: FriendlyName,
 }
 
 impl MasterCredential {
@@ -52,13 +54,20 @@ impl MasterCredential {
     ///
     /// The caller is responsible for generating `sk`, `r`, `k` from a
     /// cryptographically secure random source.
-    pub fn create(crs: &Crs, sk: MasterSecret, r: ChildRandomness, k: BlindingKey) -> Self {
+    pub fn create(
+        crs: &Crs,
+        sk: MasterSecret,
+        r: ChildRandomness,
+        k: BlindingKey,
+        friendly_name: FriendlyName,
+    ) -> Self {
         let names = crs.usernames();
         let nullifiers = derive_all_nullifiers(&sk, &names);
+        let name_scalar = friendly_name.to_scalar_bytes();
         let phi = crs
-            .commit_master_identity(&nullifiers, &k)
+            .commit_master_identity(&nullifiers, &k, &name_scalar)
             .expect("nullifier count matches CRS providers");
-        MasterCredential { phi, sk, r, k }
+        MasterCredential { phi, sk, r, k, friendly_name }
     }
 
     /// Derive the nullifier scalar `s_l` for service provider at index `l` (1-indexed).
@@ -97,9 +106,10 @@ impl MasterCredential {
         real_randomness: &[u8; 32],
         username: &Name,
         k: BlindingKey,
+        friendly_name: FriendlyName,
     ) -> Self {
         let r = derive_child_randomness(real_randomness, username);
-        Self::create(crs, sk, r, k)
+        Self::create(crs, sk, r, k, friendly_name)
     }
 
     /// Recompute `Φ` from the stored secrets and the CRS.
@@ -109,7 +119,8 @@ impl MasterCredential {
     pub fn recompute_phi(&self, crs: &Crs) -> Commitment {
         let names = crs.usernames();
         let nullifiers = derive_all_nullifiers(&self.sk, &names);
-        crs.commit_master_identity(&nullifiers, &self.k)
+        let name_scalar = self.friendly_name.to_scalar_bytes();
+        crs.commit_master_identity(&nullifiers, &self.k, &name_scalar)
             .expect("nullifier count matches CRS providers")
     }
 }
@@ -211,6 +222,7 @@ impl RegisteredIdentity {
         let pub_nul = self.credential.public_nullifier(crs, service_index);
         let all_nullifiers = self.credential.all_nullifier_scalars(crs);
 
+        let name_scalar = self.credential.friendly_name.to_scalar_bytes();
         let proof = prove_service_registration(
             crs,
             &self.anonymity_set,
@@ -221,6 +233,7 @@ impl RegisteredIdentity {
             &all_nullifiers,
             &pseudonym,
             &pub_nul,
+            &name_scalar,
         )?;
 
         Ok(ServiceRegistration {
@@ -300,7 +313,8 @@ mod tests {
         let sk = MasterSecret([seed; 32]);
         let r = ChildRandomness([seed.wrapping_add(1); 32]);
         let k = BlindingKey([seed.wrapping_add(2); 32]);
-        MasterCredential::create(crs, sk, r, k)
+        let name = FriendlyName::new(format!("user-{seed:02x}"));
+        MasterCredential::create(crs, sk, r, k, name)
     }
 
     // ── Phase 1 tests ───────────────────────────────────────────────────────
@@ -482,7 +496,8 @@ mod tests {
             let sk = MasterSecret([(i >> 8) as u8; 32]);
             let r = ChildRandomness([(i & 0xFF) as u8; 32]);
             let k = BlindingKey([((i.wrapping_add(7)) & 0xFF) as u8; 32]);
-            let cred = MasterCredential::create(&crs, sk, r, k);
+            let name = FriendlyName::new(format!("filler-{i}"));
+            let cred = MasterCredential::create(&crs, sk, r, k, name);
             anonymity_set.push(cred.phi);
         }
         // Insert our credential at position 500

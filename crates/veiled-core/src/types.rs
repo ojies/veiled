@@ -77,6 +77,75 @@ impl<'de> Deserialize<'de> for Name {
     }
 }
 
+/// A user-chosen global friendly name committed inside Φ.
+///
+/// This is distinct from `Name` (which represents service provider usernames
+/// in the CRS). The friendly name is a human-readable global identifier
+/// cryptographically bound into the master identity commitment via
+/// `name_scalar · h_name`.
+#[derive(Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct FriendlyName(pub String);
+
+impl FriendlyName {
+    /// Maximum allowed length for a friendly name, in bytes.
+    pub const MAX_LEN: usize = u8::MAX as usize; // 255
+
+    /// Create a `FriendlyName`, returning an error if `s` exceeds [`Self::MAX_LEN`] bytes.
+    pub fn try_new(s: impl Into<String>) -> Result<Self, String> {
+        let s = s.into();
+        if s.len() > Self::MAX_LEN {
+            return Err(format!(
+                "friendly name too long: {} bytes (max {})",
+                s.len(),
+                Self::MAX_LEN
+            ));
+        }
+        Ok(Self(s))
+    }
+
+    /// Create a `FriendlyName`, panicking if `s` exceeds [`Self::MAX_LEN`] bytes.
+    pub fn new(s: impl Into<String>) -> Self {
+        Self::try_new(s).expect("friendly name exceeds MAX_LEN")
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Derive the scalar committed inside Φ: `SHA256(friendly_name)` reduced to Z_q.
+    pub fn to_scalar_bytes(&self) -> [u8; 32] {
+        use sha2::Digest;
+        let hash = sha2::Sha256::digest(self.0.as_bytes());
+        hash.into()
+    }
+}
+
+impl<'de> Deserialize<'de> for FriendlyName {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        if s.len() > Self::MAX_LEN {
+            return Err(D::Error::custom(format!(
+                "friendly name too long: {} bytes (max {})",
+                s.len(),
+                Self::MAX_LEN
+            )));
+        }
+        Ok(Self(s))
+    }
+}
+
+impl fmt::Debug for FriendlyName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "FriendlyName({:?})", self.0)
+    }
+}
+
+impl fmt::Display for FriendlyName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A fixed-size batch of commitments that together form one anonymity set.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AnonymitySet {

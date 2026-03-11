@@ -58,6 +58,9 @@ pub struct Crs {
     pub security_param: u32,
     /// Base generator g = HashToCurve("CRS-ASC-generator-0").
     pub g: ProjectivePoint,
+    /// Friendly name generator h_name = HashToCurve("CRS-ASC-generator-name").
+    /// Used in `Φ = k·g + Σ s_l·h_l + name_scalar·h_name`.
+    pub h_name: ProjectivePoint,
     /// Per-service-provider generators h_1..h_L.
     /// `generators[i]` corresponds to provider `providers[i]` (0-indexed internally).
     pub generators: Vec<ProjectivePoint>,
@@ -96,6 +99,13 @@ impl Crs {
         )
         .expect("hash_to_curve never fails for secp256k1");
 
+        // h_name = HashToCurve("CRS-ASC-generator-name")
+        let h_name = Secp256k1::hash_from_bytes::<ExpandMsgXmd<Sha256>>(
+            &[b"CRS-ASC-generator-name"],
+            &[CRS_DST],
+        )
+        .expect("hash_to_curve never fails for secp256k1");
+
         // h_1..h_L (1-indexed in the spec, 0-indexed in the Vec)
         let generators: Vec<ProjectivePoint> = (1..=l)
             .map(|i| {
@@ -111,6 +121,7 @@ impl Crs {
         Crs {
             security_param: 128,
             g,
+            h_name,
             generators,
             providers,
             set_size: 1024,
@@ -139,20 +150,21 @@ impl Crs {
     /// Compute the multi-value Pedersen commitment (master identity Φ):
     ///
     /// ```text
-    /// C = r · g + v_1 · h_1 + v_2 · h_2 + ... + v_L · h_L
+    /// Φ = k·g + s_1·h_1 + ... + s_L·h_L + name_scalar·h_name
     /// ```
     ///
     /// - `nullifiers`: the L nullifier values (one per service provider, in order).
-    /// - `blinding`: the random blinding factor r.
+    /// - `blinding`: the random blinding factor k.
+    /// - `name_scalar`: SHA256(friendly_name) — the global name committed inside Φ.
     ///
-    /// This commitment encodes ALL per-verifier nullifiers at once. The hiding
-    /// property ensures nobody can extract any nullifier without the blinding key.
-    /// The binding property ensures the commitment cannot be opened to different
-    /// nullifier values.
+    /// The friendly name is cryptographically bound into Φ via the dedicated
+    /// generator `h_name`. The binding property guarantees it cannot be changed
+    /// after commitment.
     pub fn commit_master_identity(
         &self,
         nullifiers: &[Nullifier],
         blinding: &BlindingKey,
+        name_scalar: &[u8; 32],
     ) -> Result<Commitment, &'static str> {
         if nullifiers.len() != self.generators.len() {
             return Err("nullifier count must equal number of service providers");
@@ -165,6 +177,10 @@ impl Crs {
             let v = bytes_to_scalar(&nul.0);
             point += self.generators[i] * v;
         }
+
+        // name_scalar · h_name
+        let ns = bytes_to_scalar(name_scalar);
+        point += self.h_name * ns;
 
         Ok(Commitment(point.to_affine().to_bytes().into()))
     }
@@ -193,6 +209,10 @@ impl Crs {
         // g
         let g_bytes: [u8; 33] = self.g.to_affine().to_bytes().into();
         buf.extend_from_slice(&g_bytes);
+
+        // h_name
+        let h_name_bytes: [u8; 33] = self.h_name.to_affine().to_bytes().into();
+        buf.extend_from_slice(&h_name_bytes);
 
         // h_1..h_L
         for gen in &self.generators {
@@ -249,6 +269,21 @@ impl Crs {
             ProjectivePoint::from(g_affine.unwrap())
         } else {
             return Err("invalid g point");
+        };
+        pos += 33;
+
+        // h_name
+        if bytes.len() < pos + 33 {
+            return Err("CRS bytes too short for h_name");
+        }
+        let h_name_bytes: [u8; 33] = bytes[pos..pos + 33]
+            .try_into()
+            .map_err(|_| "bad h_name bytes")?;
+        let h_name_affine = AffinePoint::from_bytes(&h_name_bytes.into());
+        let h_name = if h_name_affine.is_some().into() {
+            ProjectivePoint::from(h_name_affine.unwrap())
+        } else {
+            return Err("invalid h_name point");
         };
         pos += 33;
 
@@ -324,6 +359,7 @@ impl Crs {
         Ok(Crs {
             security_param,
             g,
+            h_name,
             generators,
             providers,
             set_size,
@@ -417,6 +453,8 @@ mod tests {
         let _ = crs.h(0);
     }
 
+    const TEST_NAME: [u8; 32] = [0xAA; 32]; // placeholder name scalar for tests
+
     #[test]
     fn commit_master_identity_deterministic() {
         let crs = Crs::setup(make_providers(3));
@@ -425,8 +463,8 @@ mod tests {
         let nullifiers = derive_all_nullifiers(&secret, &names);
         let blinding = BlindingKey([0x07u8; 32]);
 
-        let c1 = crs.commit_master_identity(&nullifiers, &blinding).unwrap();
-        let c2 = crs.commit_master_identity(&nullifiers, &blinding).unwrap();
+        let c1 = crs.commit_master_identity(&nullifiers, &blinding, &TEST_NAME).unwrap();
+        let c2 = crs.commit_master_identity(&nullifiers, &blinding, &TEST_NAME).unwrap();
         assert_eq!(c1, c2);
     }
 
@@ -438,10 +476,10 @@ mod tests {
         let nullifiers = derive_all_nullifiers(&secret, &names);
 
         let c1 = crs
-            .commit_master_identity(&nullifiers, &BlindingKey([0x01u8; 32]))
+            .commit_master_identity(&nullifiers, &BlindingKey([0x01u8; 32]), &TEST_NAME)
             .unwrap();
         let c2 = crs
-            .commit_master_identity(&nullifiers, &BlindingKey([0x02u8; 32]))
+            .commit_master_identity(&nullifiers, &BlindingKey([0x02u8; 32]), &TEST_NAME)
             .unwrap();
         assert_ne!(c1, c2);
     }
@@ -454,8 +492,22 @@ mod tests {
         let nuls1 = derive_all_nullifiers(&MasterSecret([0x01u8; 32]), &crs.usernames());
         let nuls2 = derive_all_nullifiers(&MasterSecret([0x02u8; 32]), &crs.usernames());
 
-        let c1 = crs.commit_master_identity(&nuls1, &blinding).unwrap();
-        let c2 = crs.commit_master_identity(&nuls2, &blinding).unwrap();
+        let c1 = crs.commit_master_identity(&nuls1, &blinding, &TEST_NAME).unwrap();
+        let c2 = crs.commit_master_identity(&nuls2, &blinding, &TEST_NAME).unwrap();
+        assert_ne!(c1, c2);
+    }
+
+    #[test]
+    fn commit_different_name_gives_different_commitment() {
+        let crs = Crs::setup(make_providers(3));
+        let secret = MasterSecret([0x42u8; 32]);
+        let nullifiers = derive_all_nullifiers(&secret, &crs.usernames());
+        let blinding = BlindingKey([0x07u8; 32]);
+
+        let name_a = crate::types::FriendlyName::new("alice").to_scalar_bytes();
+        let name_b = crate::types::FriendlyName::new("bob").to_scalar_bytes();
+        let c1 = crs.commit_master_identity(&nullifiers, &blinding, &name_a).unwrap();
+        let c2 = crs.commit_master_identity(&nullifiers, &blinding, &name_b).unwrap();
         assert_ne!(c1, c2);
     }
 
@@ -463,9 +515,8 @@ mod tests {
     fn commit_wrong_nullifier_count_errors() {
         let crs = Crs::setup(make_providers(3));
         let blinding = BlindingKey([0x07u8; 32]);
-        // Only 2 nullifiers for 3 providers
         let too_few = vec![Nullifier([0u8; 32]), Nullifier([1u8; 32])];
-        assert!(crs.commit_master_identity(&too_few, &blinding).is_err());
+        assert!(crs.commit_master_identity(&too_few, &blinding, &TEST_NAME).is_err());
     }
 
     #[test]
@@ -474,7 +525,7 @@ mod tests {
         let secret = MasterSecret([0x42u8; 32]);
         let nullifiers = derive_all_nullifiers(&secret, &crs.usernames());
         let blinding = BlindingKey([0x07u8; 32]);
-        let c = crs.commit_master_identity(&nullifiers, &blinding).unwrap();
+        let c = crs.commit_master_identity(&nullifiers, &blinding, &TEST_NAME).unwrap();
         assert_eq!(c.as_bytes().len(), 33);
         assert!(c.as_bytes()[0] == 0x02 || c.as_bytes()[0] == 0x03);
     }
@@ -492,6 +543,10 @@ mod tests {
         let g1: [u8; 33] = crs.g.to_affine().to_bytes().into();
         let g2: [u8; 33] = crs2.g.to_affine().to_bytes().into();
         assert_eq!(g1, g2);
+
+        let hn1: [u8; 33] = crs.h_name.to_affine().to_bytes().into();
+        let hn2: [u8; 33] = crs2.h_name.to_affine().to_bytes().into();
+        assert_eq!(hn1, hn2);
 
         for i in 0..crs.num_providers() {
             let h1: [u8; 33] = crs.generators[i].to_affine().to_bytes().into();
@@ -537,7 +592,7 @@ mod tests {
         assert_eq!(unique.len(), 4);
 
         // Commit master identity
-        let phi = crs.commit_master_identity(&nullifiers, &blinding).unwrap();
+        let phi = crs.commit_master_identity(&nullifiers, &blinding, &TEST_NAME).unwrap();
         assert_eq!(phi.as_bytes().len(), 33);
         assert!(phi.as_bytes()[0] == 0x02 || phi.as_bytes()[0] == 0x03);
     }

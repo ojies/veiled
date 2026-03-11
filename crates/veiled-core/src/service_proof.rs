@@ -16,7 +16,7 @@
 //!
 //! Additionally includes π_value: a Schnorr proof that `nul_l = s_l · g`.
 //!
-//! Proof size: `911 + L×32` bytes.
+//! Proof size: `911 + (L+1)×32` bytes.
 
 use k256::{
     AffinePoint, ProjectivePoint,
@@ -155,7 +155,7 @@ fn schnorr_challenge(
 /// - π_membership: compact Bootle/Groth one-out-of-many proof (A, B, C, D, E, f, z)
 /// - π_value: Schnorr proof that `nul_l = s_l · g` (section 3.7)
 ///
-/// Proof size: `911 + L×32` bytes where L = number of service providers.
+/// Proof size: `911 + (L+1)×32` bytes where L = number of service providers.
 #[derive(Clone)]
 pub struct ServiceRegistrationProof {
     // ── π_membership: Bootle/Groth one-out-of-many ─────────────────────────
@@ -179,7 +179,7 @@ pub struct ServiceRegistrationProof {
     /// Multi-generator polynomial responses: [z_g, z_{m≠l}].
     /// z_g = k·x^M - Σ_k ρ_g[k]·x^k
     /// z_m = s_m·x^M - Σ_k ρ_m[k]·x^k (for each m ≠ l)
-    /// Length = L (1 for g + L-1 for h_m where m≠l).
+    /// Length = L+1 (1 for g + L-1 for h_m where m≠l + 1 for h_name).
     pub z_responses: Vec<[u8; 32]>,
 
     // ── π_value: Schnorr proof that nul_l = s_l · g (section 3.7) ──────────
@@ -212,6 +212,7 @@ pub fn prove_service_registration(
     nullifier_scalars: &[Nullifier],
     pseudonym: &[u8; 33],
     public_nullifier: &[u8; 33],
+    name_scalar: &[u8; 32],
 ) -> Result<ServiceRegistrationProof, &'static str> {
     if anonymity_set.len() != N {
         return Err("set must have exactly 1024 commitments");
@@ -261,8 +262,8 @@ pub fn prove_service_registration(
     let r_d = random_scalar();
 
     // Multi-generator blinding: ρ[gen_idx][k] (section 3.4: polynomial blinding)
-    // gen_idx 0 = g, gen_idx 1..L-1 = h_m for m ≠ l (in order)
-    let num_active_gens = l_count; // g + (L-1) h_m's = L total
+    // gen_idx 0 = g, gen_idx 1..L-1 = h_m for m ≠ l, gen_idx L = h_name
+    let num_active_gens = l_count + 1; // g + (L-1) h_m's + h_name = L+1 total
     let rho: Vec<[Scalar; M]> = (0..num_active_gens)
         .map(|_| std::array::from_fn(|_| random_scalar()))
         .collect();
@@ -296,7 +297,7 @@ pub fn prove_service_registration(
         cap_d += hk[k] * (-a[k] * a[k]);
     }
 
-    // ── Build list of active generators (g, then h_m for m≠l) ────────────────
+    // ── Build list of active generators (g, h_{m≠l}, h_name) ──────────────────
     let mut active_gens: Vec<ProjectivePoint> = Vec::with_capacity(num_active_gens);
     active_gens.push(g); // index 0 = CRS g
     for m in 1..=l_count {
@@ -304,6 +305,7 @@ pub fn prove_service_registration(
             active_gens.push(*crs.h(m));
         }
     }
+    active_gens.push(crs.h_name); // last = h_name
     debug_assert_eq!(active_gens.len(), num_active_gens);
 
     // ── Polynomial decomposition points (section 3.4: E_m = Q_m + blinding) ──
@@ -375,7 +377,7 @@ pub fn prove_service_registration(
         x_pow = x_pow * x;
     }
 
-    // Build witness scalars: [k, s_1, ..., s_{l-1}, s_{l+1}, ..., s_L]
+    // Build witness scalars: [k, s_{m≠l}, name_scalar]
     let mut witness_scalars: Vec<Scalar> = Vec::with_capacity(num_active_gens);
     witness_scalars.push(k_scalar); // for g
     for m in 1..=l_count {
@@ -383,6 +385,7 @@ pub fn prove_service_registration(
             witness_scalars.push(bytes_to_scalar(&nullifier_scalars[m - 1].0));
         }
     }
+    witness_scalars.push(bytes_to_scalar(name_scalar)); // for h_name
 
     let mut z_responses: Vec<[u8; 32]> = Vec::with_capacity(num_active_gens);
     for gen_idx in 0..num_active_gens {
@@ -443,8 +446,8 @@ pub fn verify_service_registration(
     if service_index < 1 || service_index > l_count {
         return false;
     }
-    // z_responses should have L entries (g + L-1 h_m's)
-    if proof.z_responses.len() != l_count {
+    // z_responses should have L+1 entries (g + L-1 h_m's + h_name)
+    if proof.z_responses.len() != l_count + 1 {
         return false;
     }
 
@@ -568,6 +571,10 @@ pub fn verify_service_registration(
         }
     }
 
+    // z_name · h_name
+    let z_name = scalar_from_bytes(&proof.z_responses[resp_idx]);
+    rhs3 += crs.h_name * z_name;
+
     // Σ_k x^k · E[k]
     let mut x_pow = Scalar::ONE;
     for k in 0..M {
@@ -587,7 +594,7 @@ mod tests {
     use crate::credential::MasterCredential;
     use crate::crs::ServiceProvider;
     use crate::nullifier_v2::derive_public_nullifier;
-    use crate::types::{BlindingKey, ChildRandomness, MasterSecret, Name};
+    use crate::types::{BlindingKey, ChildRandomness, FriendlyName, MasterSecret, Name};
 
     fn make_provider(username: &str) -> ServiceProvider {
         ServiceProvider {
@@ -608,7 +615,8 @@ mod tests {
         let sk = MasterSecret([seed; 32]);
         let r = ChildRandomness([seed.wrapping_add(1); 32]);
         let k = BlindingKey([seed.wrapping_add(2); 32]);
-        MasterCredential::create(crs, sk, r, k)
+        let name = FriendlyName::new(format!("user-{seed:02x}"));
+        MasterCredential::create(crs, sk, r, k, name)
     }
 
     fn make_full_set(crs: &Crs, target_seed: u8, target_pos: usize) -> (MasterCredential, Vec<Commitment>) {
@@ -653,6 +661,7 @@ mod tests {
             &all_nullifiers,
             &pseudonym,
             &pub_nul,
+            &cred.friendly_name.to_scalar_bytes(),
         )
         .expect("proof generation should succeed");
 
@@ -684,6 +693,7 @@ mod tests {
         let proof = prove_service_registration(
             &crs, &set, 10, service_index, TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
+            &cred.friendly_name.to_scalar_bytes(),
         )
         .unwrap();
 
@@ -713,6 +723,7 @@ mod tests {
         let proof = prove_service_registration(
             &crs, &set, 100, service_index, TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
+            &cred.friendly_name.to_scalar_bytes(),
         )
         .unwrap();
 
@@ -739,6 +750,7 @@ mod tests {
         let mut proof = prove_service_registration(
             &crs, &set, 500, service_index, TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
+            &cred.friendly_name.to_scalar_bytes(),
         )
         .unwrap();
 
@@ -766,19 +778,20 @@ mod tests {
         let proof = prove_service_registration(
             &crs, &set, 0, service_index, TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
+            &cred.friendly_name.to_scalar_bytes(),
         )
         .unwrap();
 
         // π_membership fixed: 4×33 (ABCD) + 10×33 (E_poly) + 10×32 (f) + 2×32 (z_a, z_c)
         //   = 132 + 330 + 320 + 64 = 846
-        // π_membership variable: L×32 (z_responses)
+        // π_membership variable: (L+1)×32 (z_responses: g + L-1 h_{m≠l} + h_name)
         // π_value: 33 (schnorr_r) + 32 (schnorr_s) = 65
-        // Total: 911 + L×32
-        let expected = 911 + l_count * 32;
+        // Total: 911 + (L+1)×32
+        let expected = 911 + (l_count + 1) * 32;
         let actual = 4 * 33 + M * 33 + M * 32 + 2 * 32
             + proof.z_responses.len() * 32
             + 33 + 32; // schnorr_r + schnorr_s
         assert_eq!(actual, expected);
-        assert_eq!(proof.z_responses.len(), l_count);
+        assert_eq!(proof.z_responses.len(), l_count + 1);
     }
 }

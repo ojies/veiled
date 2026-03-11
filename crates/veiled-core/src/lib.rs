@@ -16,6 +16,6 @@ pub use nullifier_v2::{derive_all_nullifiers, derive_nullifier};
 pub use proof::{MembershipProof, prove_membership, verify_membership};
 pub use service_proof::{ServiceRegistrationProof, prove_service_registration, verify_service_registration};
 pub use types::{
-    AnonymitySet, BlindingKey, ChildRandomness, Commitment, MasterSecret, Name, Nullifier,
-    PublicKey,
+    AnonymitySet, BlindingKey, ChildRandomness, Commitment, FriendlyName, MasterSecret, Name,
+    Nullifier, PublicKey,
 };
