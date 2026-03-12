@@ -280,7 +280,7 @@ veiled/
 │   ├── core/                         # cryptographic primitives & shared types
 │   │   ├── mod.rs                    # public API re-exports
 │   │   ├── crs.rs                    # CRS setup, multi-value Pedersen commitment, HashToCurve generators
-│   │   ├── credential.rs             # MasterCredential (Phase 1) + RegisteredIdentity (Phase 2) + ServiceRegistration (Phase 3)
+│   │   ├── credential.rs             # MasterCredential (Phase 1) + RegisteredIdentity (Phase 2) + PaymentIdentityRegistration (Phase 3)
 │   │   ├── child_credential.rs       # child secret key + pseudonym derivation (Phase 3)
 │   │   ├── service_proof.rs          # adapted Bootle/Groth proof for multi-value commitments (Phase 3)
 │   │   ├── nullifier_v2.rs           # HKDF per-verifier nullifier derivation + public nullifiers

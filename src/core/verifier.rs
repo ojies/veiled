@@ -19,8 +19,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::core::crs::Crs;
-use crate::core::service_proof::{verify_service_registration, ServiceRegistrationProof};
+use crate::core::payment_identity::{ PaymentIdentityRegistrationProof};
 use crate::core::types::Commitment;
+use crate::core::verify_payment_identity_registration_proof;
 
 // ── error types ─────────────────────────────────────────────────────────────
 
@@ -40,7 +41,7 @@ pub enum VerificationError {
 }
 
 /// Result of a successful verification + registration (step 4.8).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistrationResult {
     pub pseudonym: [u8; 33],
     pub public_nullifier: [u8; 33],
@@ -54,6 +55,10 @@ pub struct RegistrationResult {
 /// Bob is user `l` in the CRS. When Alice proves membership and presents
 /// her nullifier `nul_l = s_l · g`, Bob verifies the proof and stores
 /// `(ϕ, nul_l)` to track registered pseudonyms and prevent Sybil attacks.
+///
+/// The `registrations` table maps pseudonym → registration result, so that
+/// when a payment request arrives (proving ownership of ϕ), the merchant
+/// can look up the associated nullifier and friendly name.
 pub struct VerifierState {
     /// This user's index in the CRS (1-indexed).
     pub user_index: usize,
@@ -64,6 +69,9 @@ pub struct VerifierState {
     registered_nullifiers: HashSet<[u8; 33]>,
     /// Registered pseudonyms — for duplicate detection (step 4.7).
     registered_pseudonyms: HashSet<[u8; 33]>,
+    /// Registration table: pseudonym → (nullifier, friendly_name).
+    /// Used to link payment requests back to registered identities.
+    registrations: HashMap<[u8; 33], RegistrationResult>,
 }
 
 impl VerifierState {
@@ -76,6 +84,7 @@ impl VerifierState {
             set_cache: HashMap::new(),
             registered_nullifiers: HashSet::new(),
             registered_pseudonyms: HashSet::new(),
+            registrations: HashMap::new(),
         }
     }
 
@@ -104,6 +113,15 @@ impl VerifierState {
     /// Return the number of registered pseudonyms.
     pub fn registered_count(&self) -> usize {
         self.registered_pseudonyms.len()
+    }
+
+    /// Look up a registered identity by pseudonym.
+    ///
+    /// Used during payment request verification (Option A): the merchant
+    /// verifies the Schnorr proof of ϕ ownership, then looks up ϕ here
+    /// to find the associated nullifier and friendly name from Phase 3.
+    pub fn lookup_by_pseudonym(&self, pseudonym: &[u8; 33]) -> Option<&RegistrationResult> {
+        self.registrations.get(pseudonym)
     }
 
     /// Steps 4.7: Check freshness of nullifier and pseudonym.
@@ -139,7 +157,7 @@ impl VerifierState {
         crs: &Crs,
         pseudonym: &[u8; 33],
         public_nullifier: &[u8; 33],
-        proof: &ServiceRegistrationProof,
+        proof: &PaymentIdentityRegistrationProof,
         set_id: u64,
         friendly_name: &str,
     ) -> Result<RegistrationResult, VerificationError> {
@@ -151,7 +169,7 @@ impl VerifierState {
 
         // 4.2–4.6: Cryptographic verification (shifted commitments, Fiat-Shamir,
         // bitness, polynomial identity, nullifier correctness).
-        let valid = verify_service_registration(
+        let valid = verify_payment_identity_registration_proof(
             crs,
             anonymity_set,
             self.user_index,
@@ -166,7 +184,7 @@ impl VerifierState {
 
         // 4.6b: Verify name revelation — SHA256(friendly_name) must match
         // the name_scalar embedded in the proof (bound via Fiat-Shamir).
-        if !crate::core::payment::verify_name_revelation(&proof.name_scalar, friendly_name) {
+        if !crate::core::payment_identity::verify_name_revelation(&proof.name_scalar, friendly_name) {
             return Err(VerificationError::NameMismatch);
         }
 
@@ -177,11 +195,14 @@ impl VerifierState {
         self.registered_nullifiers.insert(*public_nullifier);
         self.registered_pseudonyms.insert(*pseudonym);
 
-        Ok(RegistrationResult {
+        let result = RegistrationResult {
             pseudonym: *pseudonym,
             public_nullifier: *public_nullifier,
             friendly_name: friendly_name.to_string(),
-        })
+        };
+        self.registrations.insert(*pseudonym, result.clone());
+
+        Ok(result)
     }
 }
 
@@ -190,14 +211,14 @@ impl VerifierState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::child_credential::derive_pseudonym;
+    use crate::core::request::derive_payment_request_pseudonym;
     use crate::core::credential::MasterCredential;
-    use crate::core::crs::User;
-    use crate::core::service_proof::prove_service_registration;
+    use crate::core::crs::Merchant;
+    use crate::core::payment_identity::prove_payment_identity_registration;
     use crate::core::types::{BlindingKey, ChildRandomness, FriendlyName, MasterSecret, Name};
 
-    fn make_provider(name: &str) -> User {
-        User {
+    fn make_provider(name: &str) -> Merchant {
+        Merchant {
             name: Name::new(name),
             credential_generator: [0x02; 33],
             origin: format!("https://{name}"),
@@ -205,7 +226,7 @@ mod tests {
     }
 
     fn make_crs(n: usize) -> Crs {
-        let providers: Vec<User> = (0..n)
+        let providers: Vec<Merchant> = (0..n)
             .map(|i| make_provider(&format!("user-{i}")))
             .collect();
         Crs::setup(providers)
@@ -247,18 +268,18 @@ mod tests {
         cred: &MasterCredential,
         set: &[Commitment],
         target_pos: usize,
-        service_index: usize,
+        user_index: usize,
         set_id: u64,
-    ) -> (ServiceRegistrationProof, [u8; 33], [u8; 33], String) {
+    ) -> (PaymentIdentityRegistrationProof, [u8; 33], [u8; 33], String) {
         let all_nullifiers = cred.all_nullifier_scalars(crs);
-        let pseudonym = derive_pseudonym(&cred.r, &crs.providers[service_index - 1].name, &crs.g);
-        let pub_nul = cred.public_nullifier(crs, service_index);
+        let pseudonym = derive_payment_request_pseudonym(&cred.r, &crs.merchants[user_index - 1].name, &crs.g);
+        let pub_nul = cred.public_nullifier(crs, user_index);
 
-        let proof = prove_service_registration(
+        let proof = prove_payment_identity_registration(
             crs,
             set,
             target_pos,
-            service_index,
+            user_index,
             set_id,
             &cred.k.0,
             &all_nullifiers,

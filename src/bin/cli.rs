@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use veiled::core::{BlindingKey, Commitment, Name, PublicKey, commit, compute_nullifier, prove_membership};
+use veiled::core::{BlindingKey, Commitment, Name, PublicKey, commit};
 
 // ── CLI definition ────────────────────────────────────────────────────────────
 
@@ -224,60 +224,20 @@ fn main() {
             println!("is needed to generate commitments.");
         }
 
-        Command::Derive { pub_key, name, blinding } => {
-            let pk = parse_pub_key(&pub_key).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
-            let bk = match blinding {
-                Some(b) => parse_blinding(&b).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); }),
-                None => BlindingKey(random_32()),
-            };
-            let name = Name::try_new(name).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
-
-            let nullifier = compute_nullifier(&pk, &name);
-            let commitment = commit(&nullifier, &bk);
-
-            println!("pub_key:    {pub_key}");
-            println!("name:       {name}");
-            println!("blinding:   {}", hex::encode(bk.as_bytes()));
-            println!();
-            println!("nullifier:  {}", hex::encode(nullifier.as_bytes()));
-            println!("commitment: {}", hex::encode(commitment.as_bytes()));
-            println!();
-            println!("# nothing was sent to the server");
+        Command::Derive { .. } => {
+            // TODO: `compute_nullifier(PublicKey, Name)` was removed during the
+            // MembershipProof → PaymentIdentityProof refactor.  This command
+            // needs updating to use the new nullifier derivation API.
+            eprintln!("error: derive command not yet migrated to new nullifier API");
+            std::process::exit(1);
         }
 
-        Command::Register { pub_key, name, blinding } => {
-            let pk = parse_pub_key(&pub_key).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
-            let bk = match blinding {
-                Some(b) => parse_blinding(&b).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); }),
-                None => {
-                    let b = BlindingKey(random_32());
-                    println!("generated blinding: {}", hex::encode(b.as_bytes()));
-                    b
-                }
-            };
-            let name = Name::try_new(name).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
-
-            let nullifier = compute_nullifier(&pk, &name);
-            let commitment = commit(&nullifier, &bk);
-
-            println!("nullifier:  {}", hex::encode(nullifier.as_bytes()));
-            println!("commitment: {}", hex::encode(commitment.as_bytes()));
-
-            let url = format!("{}/api/v1/register", cli.server);
-            let resp = client.post(&url)
-                .json(&RegisterBody {
-                    commitment: hex::encode(commitment.as_bytes()),
-                    nullifier: hex::encode(nullifier.as_bytes()),
-                })
-                .send()
-                .unwrap_or_else(|e| { eprintln!("request failed: {e}"); std::process::exit(1); });
-
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            check_api_error(status, &body);
-
-            let r: RegisterResponse = serde_json::from_str(&body).expect("unexpected response format");
-            println!("registered → set_id={}, index={}", r.set_id, r.index);
+        Command::Register { .. } => {
+            // TODO: `compute_nullifier(PublicKey, Name)` was removed during the
+            // MembershipProof → PaymentIdentityProof refactor.  This command
+            // needs updating to use the new nullifier derivation API.
+            eprintln!("error: register command not yet migrated to new nullifier API");
+            std::process::exit(1);
         }
 
         Command::Has { pub_key, name } => {
@@ -356,44 +316,11 @@ fn main() {
             println!("blinding: {}", kf.blinding);
         }
 
-        Command::Prove { pub_key, name, blinding, set_id, index } => {
-            let pk  = parse_pub_key(&pub_key).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
-            let bk  = parse_blinding(&blinding).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
-            let name = Name::try_new(name).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
-            let nullifier = compute_nullifier(&pk, &name);
-
-            // Fetch the anonymity set from the registry.
-            let url = format!("{}/api/v1/sets/{set_id}", cli.server);
-            let resp = client.get(&url).send()
-                .unwrap_or_else(|e| { eprintln!("request failed: {e}"); std::process::exit(1); });
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            check_api_error(status, &body);
-
-            let detail: SetDetail = serde_json::from_str(&body).expect("unexpected response format");
-            let set: Vec<Commitment> = detail.commitments.iter()
-                .map(|hex_str| Commitment::from_hex(hex_str)
-                    .unwrap_or_else(|e| { eprintln!("bad commitment in set: {e}"); std::process::exit(1); }))
-                .collect();
-
-            println!("generating proof for set {} index {} ({} commitments)…", set_id, index, set.len());
-            let proof = prove_membership(&set, index, &nullifier, &bk)
-                .unwrap_or_else(|e| { eprintln!("prove failed: {e}"); std::process::exit(1); });
-
-            // Serialise the proof as a flat hex blob.
-            let mut bytes = Vec::with_capacity(878);
-            bytes.extend_from_slice(&proof.a);
-            bytes.extend_from_slice(&proof.b);
-            bytes.extend_from_slice(&proof.c);
-            bytes.extend_from_slice(&proof.d);
-            for g in &proof.g { bytes.extend_from_slice(g); }
-            for f in &proof.f { bytes.extend_from_slice(f); }
-            bytes.extend_from_slice(&proof.z_a);
-            bytes.extend_from_slice(&proof.z_c);
-            bytes.extend_from_slice(&proof.z);
-
-            println!("proof ({} bytes):", bytes.len());
-            println!("{}", hex::encode(&bytes));
+        Command::Prove { .. } => {
+            // TODO: `prove_membership` was removed during the refactor to
+            // PaymentIdentityProof.  This command needs updating.
+            eprintln!("error: prove command not yet migrated to PaymentIdentityProof");
+            std::process::exit(1);
         }
     }
 }

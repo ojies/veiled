@@ -18,132 +18,84 @@
 //!
 //! Proof size: `975 + (L+1)×32` bytes.
 
-use k256::{
-    AffinePoint, ProjectivePoint,
-    elliptic_curve::{
-        group::GroupEncoding,
-        hash2curve::{ExpandMsgXmd, GroupDigest},
-        ops::Reduce,
-    },
-    Scalar, Secp256k1, U256,
-};
-use rand_core::{OsRng, RngCore};
-use sha2::{Digest, Sha256};
 
 use crate::core::crs::Crs;
-use crate::core::types::{Commitment, Nullifier};
+use crate::core::types::{ Commitment, Nullifier};
+use crate::core::utils::{M, N, bit_generators, bytes_to_scalar, fiat_shamir_challenge, point_from_bytes, point_to_bytes, random_scalar, scalar_from_bytes, scalar_to_bytes, schnorr_challenge};
+use k256::Scalar;
+use k256::{
+     ProjectivePoint,
 
-// ── constants ─────────────────────────────────────────────────────────────────
+};
 
-const M: usize = 10; // bits
-const N: usize = 1 << M; // 1024
 
-/// CRS domain separation tag — shared with crs.rs.
-const CRS_DST: &[u8] = b"CRS-ASC-v1";
 
-// ── per-bit generators H_0 .. H_{M-1} ────────────────────────────────────────
-//
-// Independent NUMS generators for the compact aggregate bit commitment scheme.
-// Derived via HashToCurve with CRS-consistent domain separation.
 
-fn bit_generators() -> [ProjectivePoint; M] {
-    std::array::from_fn(|k| {
-        let tag = format!("CRS-ASC-bit-generator-{k}");
-        Secp256k1::hash_from_bytes::<ExpandMsgXmd<Sha256>>(
-            &[tag.as_bytes()],
-            &[CRS_DST],
-        )
-        .expect("hash_to_curve never fails for secp256k1")
-    })
+
+
+/// The message sent from a prover to a verifier during Phase 3.
+///
+/// ```text
+/// (ϕ, nul_l, π, d̂, friendly_name)
+/// ```
+///
+/// The nullifier scalar `s_l` and name scalar `SHA256(friendly_name)` are
+/// embedded inside π (self-contained proof).
+pub struct PaymentIdentityRegistration {
+    /// Pseudonym `ϕ = csk_l · g` — the user's public identity at this service.
+    pub pseudonym: [u8; 33],
+    /// Public nullifier `nul_l = s_l · g` — Sybil resistance token.
+    pub public_nullifier: [u8; 33],
+    /// `d̂` — which anonymity set the user is in.
+    pub set_id: u64,
+    /// Which service this registration is for (1-indexed).
+    pub service_index: usize,
+    /// The prover's revealed friendly name — verifier checks
+    /// `SHA256(friendly_name) == proof.name_scalar`.
+    pub friendly_name: String,
+    /// The adapted Bootle/Groth membership proof over shifted commitments.
+    /// Contains the embedded nullifier scalar `s_l` and name scalar.
+    pub proof: crate::core::payment_identity::PaymentIdentityRegistrationProof,
 }
 
-// ── scalar / point helpers ───────────────────────────────────────────────────
 
-fn bytes_to_scalar(b: &[u8; 32]) -> Scalar {
-    Scalar::reduce(U256::from_be_slice(b))
+/// Verify a complete service registration message.
+///
+/// The verifier needs the CRS and the frozen anonymity set `Λ_{d̂}`.
+pub fn verify_payment_identity_registration(
+    crs: &Crs,
+    anonymity_set: &[Commitment],
+    reg: &PaymentIdentityRegistration,
+) -> bool {
+    crate::core::payment_identity::verify_payment_identity_registration_proof(
+        crs,
+        anonymity_set,
+        reg.service_index,
+        reg.set_id,
+        &reg.pseudonym,
+        &reg.public_nullifier,
+        &reg.proof,
+    )
 }
 
-fn random_scalar() -> Scalar {
-    let mut buf = [0u8; 32];
-    OsRng.fill_bytes(&mut buf);
-    bytes_to_scalar(&buf)
-}
 
-fn scalar_to_bytes(s: &Scalar) -> [u8; 32] {
-    s.to_bytes().into()
-}
-
-fn point_to_bytes(p: &ProjectivePoint) -> [u8; 33] {
-    p.to_affine().to_bytes().into()
-}
-
-fn point_from_bytes(b: &[u8; 33]) -> Option<ProjectivePoint> {
-    AffinePoint::from_bytes(b.into()).map(ProjectivePoint::from).into()
-}
-
-fn scalar_from_bytes(b: &[u8; 32]) -> Scalar {
-    bytes_to_scalar(b)
-}
-
-// ── Fiat-Shamir challenge ───────────────────────────────────────────────────
-//
-// x = Hash(crs, Λ, d̂, l, nul_l, ϕ, {commitments}, {polynomial points})
-// Spec section 3.5: "The inclusion of ϕ (the pseudonym) in the hash is
-// critical — it binds the proof to a specific pseudonym."
-
-fn fiat_shamir_challenge(
-    crs_g: &ProjectivePoint,
-    pseudonym: &[u8; 33],
-    public_nullifier: &[u8; 33],
-    service_index: usize,
-    set_id: u64,
-    name_scalar: &[u8; 32],
-    d_set: &[ProjectivePoint],
-    a: &ProjectivePoint,
-    b: &ProjectivePoint,
-    c: &ProjectivePoint,
-    d: &ProjectivePoint,
-    e_poly: &[ProjectivePoint; M],
-) -> Scalar {
-    let mut hasher = Sha256::new();
-    hasher.update(b"CRS-ASC-service-registration-v1");
-    hasher.update(point_to_bytes(crs_g)); // bind to CRS
-    hasher.update(pseudonym);             // ϕ
-    hasher.update(public_nullifier);      // nul_l
-    hasher.update(&(service_index as u64).to_be_bytes()); // l
-    hasher.update(&set_id.to_be_bytes()); // d̂
-    hasher.update(name_scalar);           // bind revealed name
-    for di in d_set {
-        hasher.update(point_to_bytes(di));
-    }
-    hasher.update(point_to_bytes(a));
-    hasher.update(point_to_bytes(b));
-    hasher.update(point_to_bytes(c));
-    hasher.update(point_to_bytes(d));
-    for ei in e_poly {
-        hasher.update(point_to_bytes(ei));
-    }
-    let hash: [u8; 32] = hasher.finalize().into();
-    bytes_to_scalar(&hash)
-}
-
-// ── Schnorr challenge for π_value ───────────────────────────────────────────
-//
-// Spec section 3.7: "π_value = Schnorr proof that nul_l = s_l·g"
-// e = Hash("CRS-ASC-schnorr-nullifier" || g || nul_l || R)
-
-fn schnorr_challenge(
-    g: &ProjectivePoint,
-    public_nullifier: &[u8; 33],
-    r_point: &ProjectivePoint,
-) -> Scalar {
-    let mut hasher = Sha256::new();
-    hasher.update(b"CRS-ASC-schnorr-nullifier");
-    hasher.update(point_to_bytes(g));
-    hasher.update(public_nullifier);
-    hasher.update(point_to_bytes(r_point));
-    let hash: [u8; 32] = hasher.finalize().into();
-    bytes_to_scalar(&hash)
+/// Verify that a claimed friendly name matches the name_scalar in a proof.
+///
+/// Bob reveals his friendly_name alongside the proof. Alice checks:
+/// ```text
+/// SHA256(friendly_name) == proof.name_scalar
+/// ```
+///
+/// This is secure because `name_scalar` is bound to the proof via
+/// Fiat-Shamir — if the prover embeds a fake name_scalar, the challenge
+/// changes and the proof fails.
+pub fn verify_name_revelation(
+    proof_name_scalar: &[u8; 32],
+    claimed_name: &str,
+) -> bool {
+    use sha2::{Digest, Sha256};
+    let computed: [u8; 32] = Sha256::digest(claimed_name.as_bytes()).into();
+    computed == *proof_name_scalar
 }
 
 // ── proof structure ─────────────────────────────────────────────────────────
@@ -158,8 +110,10 @@ fn schnorr_challenge(
 /// - π_value: Schnorr proof that `nul_l = s_l · g` (section 3.7)
 ///
 /// Proof size: `975 + (L+1)×32` bytes where L = number of service providers.
+
+
 #[derive(Clone)]
-pub struct ServiceRegistrationProof {
+pub struct PaymentIdentityRegistrationProof {
     // ── π_membership: Bootle/Groth one-out-of-many ─────────────────────────
 
     /// Aggregate bit commitment A = r_a·g + Σ_k a[k]·H_k.
@@ -217,7 +171,7 @@ pub struct ServiceRegistrationProof {
 /// - `nullifier_scalars`: all L nullifier scalars `s_1..s_L`.
 /// - `pseudonym`: `ϕ = csk_l · g` (33-byte compressed point).
 /// - `public_nullifier`: `nul_l = s_l · g` (33-byte compressed point).
-pub fn prove_service_registration(
+pub fn prove_payment_identity_registration(
     crs: &Crs,
     anonymity_set: &[Commitment],
     index: usize,
@@ -228,14 +182,14 @@ pub fn prove_service_registration(
     pseudonym: &[u8; 33],
     public_nullifier: &[u8; 33],
     name_scalar: &[u8; 32],
-) -> Result<ServiceRegistrationProof, &'static str> {
+) -> Result<PaymentIdentityRegistrationProof, &'static str> {
     if anonymity_set.len() != N {
         return Err("set must have exactly 1024 commitments");
     }
     if index >= N {
         return Err("index out of range");
     }
-    let l_count = crs.num_providers();
+    let l_count = crs.num_merchants();
     if service_index < 1 || service_index > l_count {
         return Err("service_index out of range (1-indexed)");
     }
@@ -419,7 +373,7 @@ pub fn prove_service_registration(
     let schnorr_e = schnorr_challenge(&g, public_nullifier, &schnorr_r_point);
     let schnorr_s_scalar = schnorr_nonce + schnorr_e * s_l;
 
-    Ok(ServiceRegistrationProof {
+    Ok(PaymentIdentityRegistrationProof {
         a:   point_to_bytes(&cap_a),
         b:   point_to_bytes(&cap_b),
         c:   point_to_bytes(&cap_c),
@@ -450,19 +404,19 @@ pub fn prove_service_registration(
 /// - 4.4: Verify 10 bitness equations (Check 1 + Check 2)
 /// - 4.5: Verify polynomial identity — O(N) group ops (Schwartz-Zippel)
 /// - 4.6: Verify nullifier correctness — `nul_l = s_l · g` (Schnorr π_value)
-pub fn verify_service_registration(
+pub fn verify_payment_identity_registration_proof(
     crs: &Crs,
     anonymity_set: &[Commitment],
     service_index: usize,
     set_id: u64,
     pseudonym: &[u8; 33],
     public_nullifier: &[u8; 33],
-    proof: &ServiceRegistrationProof,
+    proof: &PaymentIdentityRegistrationProof,
 ) -> bool {
     if anonymity_set.len() != N {
         return false;
     }
-    let l_count = crs.num_providers();
+    let l_count = crs.num_merchants();
     if service_index < 1 || service_index > l_count {
         return false;
     }
@@ -636,7 +590,7 @@ pub fn verify_service_registration(
 // Fixed portion: 975 bytes. Total: 975 + (L+1)×32.
 
 /// Serialize a `ServiceRegistrationProof` to bytes.
-pub fn serialize_service_proof(proof: &ServiceRegistrationProof) -> Vec<u8> {
+pub fn serialize_payment_identity_registration_proof(proof: &PaymentIdentityRegistrationProof) -> Vec<u8> {
     let z_len = proof.z_responses.len() * 32;
     let mut buf = Vec::with_capacity(975 + z_len);
 
@@ -666,7 +620,7 @@ pub fn serialize_service_proof(proof: &ServiceRegistrationProof) -> Vec<u8> {
 /// Deserialize a `ServiceRegistrationProof` from bytes.
 ///
 /// The variable-length `z_responses` portion must be a multiple of 32 bytes.
-pub fn deserialize_service_proof(b: &[u8]) -> Result<ServiceRegistrationProof, String> {
+pub fn deserialize_payment_identity_registration_proof(b: &[u8]) -> Result<PaymentIdentityRegistrationProof, String> {
     if b.len() < 975 {
         return Err(format!("proof too short: {} bytes (minimum 975)", b.len()));
     }
@@ -696,7 +650,7 @@ pub fn deserialize_service_proof(b: &[u8]) -> Result<ServiceRegistrationProof, S
         z_responses.push(z);
     }
 
-    Ok(ServiceRegistrationProof {
+    Ok(PaymentIdentityRegistrationProof {
         a:  b[  0.. 33].try_into().unwrap(),
         b:  b[ 33.. 66].try_into().unwrap(),
         c:  b[ 66.. 99].try_into().unwrap(),
@@ -718,14 +672,14 @@ pub fn deserialize_service_proof(b: &[u8]) -> Result<ServiceRegistrationProof, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::child_credential::derive_pseudonym;
+    use crate::core::request::derive_payment_request_pseudonym;
     use crate::core::credential::MasterCredential;
-    use crate::core::crs::User;
-    use crate::core::nullifier_v2::derive_public_nullifier;
+    use crate::core::crs::Merchant;
+    use crate::core::nullifier::derive_public_nullifier;
     use crate::core::types::{BlindingKey, ChildRandomness, FriendlyName, MasterSecret, Name};
 
-    fn make_provider(name: &str) -> User {
-        User {
+    fn make_provider(name: &str) -> Merchant {
+        Merchant {
             name: Name::new(name),
             credential_generator: [0x02; 33],
             origin: format!("https://{name}"),
@@ -733,7 +687,7 @@ mod tests {
     }
 
     fn make_crs(n: usize) -> Crs {
-        let providers: Vec<User> = (0..n)
+        let providers: Vec<Merchant> = (0..n)
             .map(|i| make_provider(&format!("user-{i}")))
             .collect();
         Crs::setup(providers)
@@ -774,16 +728,16 @@ mod tests {
         let target_pos = 42;
         let (cred, set) = make_full_set(&crs, 0xAA, target_pos);
 
-        let service_index = 2; // 1-indexed
+        let user_index = 2; // 1-indexed
         let all_nullifiers = cred.all_nullifier_scalars(&crs);
-        let pseudonym = derive_pseudonym(&cred.r, &crs.providers[service_index - 1].name, &crs.g);
-        let pub_nul = cred.public_nullifier(&crs, service_index);
+        let pseudonym = derive_payment_request_pseudonym(&cred.r, &crs.merchants[user_index - 1].name, &crs.g);
+        let pub_nul = cred.public_nullifier(&crs, user_index);
 
-        let proof = prove_service_registration(
+        let proof = prove_payment_identity_registration(
             &crs,
             &set,
             target_pos,
-            service_index,
+            user_index,
             TEST_SET_ID,
             &cred.k.0,
             &all_nullifiers,
@@ -794,10 +748,10 @@ mod tests {
         .expect("proof generation should succeed");
 
         assert!(
-            verify_service_registration(
+            verify_payment_identity_registration_proof(
                 &crs,
                 &set,
-                service_index,
+                user_index,
                 TEST_SET_ID,
                 &pseudonym,
                 &pub_nul,
@@ -812,13 +766,13 @@ mod tests {
         let crs = make_crs(3);
         let (cred, set) = make_full_set(&crs, 0xBB, 10);
 
-        let service_index = 1;
+        let user_index = 1;
         let all_nullifiers = cred.all_nullifier_scalars(&crs);
-        let pseudonym = derive_pseudonym(&cred.r, &crs.providers[service_index - 1].name, &crs.g);
-        let pub_nul = cred.public_nullifier(&crs, service_index);
+        let pseudonym = derive_payment_request_pseudonym(&cred.r, &crs.merchants[user_index - 1].name, &crs.g);
+        let pub_nul = cred.public_nullifier(&crs, user_index);
 
-        let proof = prove_service_registration(
-            &crs, &set, 10, service_index, TEST_SET_ID,
+        let proof = prove_payment_identity_registration(
+            &crs, &set, 10, user_index, TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
             &cred.friendly_name.to_scalar_bytes(),
         )
@@ -830,11 +784,11 @@ mod tests {
         tampered_proof.nullifier_scalar = [0xFF; 32];
         let wrong_pub = derive_public_nullifier(
             &MasterSecret([0xFF; 32]),
-            &crs.providers[0].name,
+            &crs.merchants[0].name,
             &crs.g,
         );
-        assert!(!verify_service_registration(
-            &crs, &set, service_index, TEST_SET_ID,
+        assert!(!verify_payment_identity_registration_proof(
+            &crs, &set, user_index, TEST_SET_ID,
             &pseudonym, &wrong_pub, &tampered_proof,
         ));
     }
@@ -844,13 +798,13 @@ mod tests {
         let crs = make_crs(3);
         let (cred, set) = make_full_set(&crs, 0xCC, 100);
 
-        let service_index = 1;
+        let user_index = 1;
         let all_nullifiers = cred.all_nullifier_scalars(&crs);
-        let pseudonym = derive_pseudonym(&cred.r, &crs.providers[service_index - 1].name, &crs.g);
-        let pub_nul = cred.public_nullifier(&crs, service_index);
+        let pseudonym = derive_payment_request_pseudonym(&cred.r, &crs.merchants[user_index - 1].name, &crs.g);
+        let pub_nul = cred.public_nullifier(&crs, user_index);
 
-        let proof = prove_service_registration(
-            &crs, &set, 100, service_index, TEST_SET_ID,
+        let proof = prove_payment_identity_registration(
+            &crs, &set, 100, user_index, TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
             &cred.friendly_name.to_scalar_bytes(),
         )
@@ -859,7 +813,7 @@ mod tests {
         // Verify at different service index — should fail
         let other_service = 2;
         let other_pub_nul = cred.public_nullifier(&crs, other_service);
-        assert!(!verify_service_registration(
+        assert!(!verify_payment_identity_registration_proof(
             &crs, &set, other_service, TEST_SET_ID,
             &pseudonym, &other_pub_nul, &proof,
         ));
@@ -870,13 +824,13 @@ mod tests {
         let crs = make_crs(2);
         let (cred, set) = make_full_set(&crs, 0xDD, 500);
 
-        let service_index = 1;
+        let user_index = 1;
         let all_nullifiers = cred.all_nullifier_scalars(&crs);
-        let pseudonym = derive_pseudonym(&cred.r, &crs.providers[service_index - 1].name, &crs.g);
-        let pub_nul = cred.public_nullifier(&crs, service_index);
+        let pseudonym = derive_payment_request_pseudonym(&cred.r, &crs.merchants[user_index - 1].name, &crs.g);
+        let pub_nul = cred.public_nullifier(&crs, user_index);
 
-        let mut proof = prove_service_registration(
-            &crs, &set, 500, service_index, TEST_SET_ID,
+        let mut proof = prove_payment_identity_registration(
+            &crs, &set, 500, user_index, TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
             &cred.friendly_name.to_scalar_bytes(),
         )
@@ -885,8 +839,8 @@ mod tests {
         // Flip a byte in z_responses
         proof.z_responses[0][0] ^= 0xFF;
 
-        assert!(!verify_service_registration(
-            &crs, &set, service_index, TEST_SET_ID,
+        assert!(!verify_payment_identity_registration_proof(
+            &crs, &set, user_index, TEST_SET_ID,
             &pseudonym, &pub_nul, &proof,
         ));
     }
@@ -897,13 +851,13 @@ mod tests {
         let crs = make_crs(l_count);
         let (cred, set) = make_full_set(&crs, 0xEE, 0);
 
-        let service_index = 1;
+        let user_index = 1;
         let all_nullifiers = cred.all_nullifier_scalars(&crs);
-        let pseudonym = derive_pseudonym(&cred.r, &crs.providers[service_index - 1].name, &crs.g);
-        let pub_nul = cred.public_nullifier(&crs, service_index);
+        let pseudonym = derive_payment_request_pseudonym(&cred.r, &crs.merchants[user_index - 1].name, &crs.g);
+        let pub_nul = cred.public_nullifier(&crs, user_index);
 
-        let proof = prove_service_registration(
-            &crs, &set, 0, service_index, TEST_SET_ID,
+        let proof = prove_payment_identity_registration(
+            &crs, &set, 0, user_index, TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
             &cred.friendly_name.to_scalar_bytes(),
         )
