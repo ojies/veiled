@@ -1,65 +1,104 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 300" width="900" height="300">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" width="960" height="320">
   <defs>
     <!-- Grid pattern -->
     <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#333333" stroke-width="0.8"/>
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1f1f1f" stroke-width="0.6"/>
     </pattern>
 
-    <!-- Text shadow for 3D effect -->
-    <filter id="text-shadow" x="-5%" y="-5%" width="115%" height="115%">
-      <feDropShadow dx="3" dy="3" stdDeviation="1" flood-color="#000000" flood-opacity="0.7"/>
-    </filter>
+    <!-- Background gradient -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0c0c0c"/>
+      <stop offset="100%" stop-color="#111111"/>
+    </linearGradient>
 
-    <!-- Glow for the Bitcoin symbol -->
-    <filter id="btc-glow">
-      <feGaussianBlur stdDeviation="2" result="glow"/>
+    <!-- Orange gradient -->
+    <linearGradient id="btc-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F5A623"/>
+      <stop offset="100%" stop-color="#D4800A"/>
+    </linearGradient>
+
+    <!-- Glow filter -->
+    <filter id="glow" x="-15%" y="-15%" width="130%" height="130%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
       <feMerge>
-        <feMergeNode in="glow"/>
+        <feMergeNode in="blur"/>
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
+
+    <!-- Text depth -->
+    <filter id="text-depth" x="-3%" y="-3%" width="110%" height="110%">
+      <feDropShadow dx="2" dy="2" stdDeviation="1.5" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+
+    <!-- Accent line gradient -->
+    <linearGradient id="line-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#D4800A" stop-opacity="0"/>
+      <stop offset="20%" stop-color="#F5A623"/>
+      <stop offset="80%" stop-color="#F5A623"/>
+      <stop offset="100%" stop-color="#D4800A" stop-opacity="0"/>
+    </linearGradient>
   </defs>
 
-  <!-- Black background -->
-  <rect width="900" height="300" fill="#0a0a0a"/>
+  <!-- Background -->
+  <rect width="960" height="320" fill="url(#bg)"/>
+  <rect width="960" height="320" fill="url(#grid)"/>
 
-  <!-- Grid overlay -->
-  <rect width="900" height="300" fill="url(#grid)"/>
+  <!-- Logo: concentric broken rings + Bitcoin symbol -->
+  <g transform="translate(148, 160)">
+    <!-- Broken concentric rings -->
+    <g fill="none" stroke-linecap="round">
+      <!-- Ring 1 (outermost) -->
+      <circle r="130" stroke="#ffffff" stroke-width="3" opacity="0.08"/>
+      <path d="M 0,-130 A 130,130 0 0,1 130,0" stroke="#ffffff" stroke-width="4" opacity="0.3"/>
+      <path d="M -91.9,-91.9 A 130,130 0 0,0 -130,0" stroke="#ffffff" stroke-width="4" opacity="0.2"/>
 
-  <!-- Concentric target rings (left side) -->
-  <g transform="translate(130, 155)">
-    <circle r="110" fill="none" stroke="#d0d0d0" stroke-width="5.5" opacity="0.85"/>
-    <circle r="86" fill="none" stroke="#d0d0d0" stroke-width="4.5" opacity="0.75"/>
-    <circle r="63" fill="none" stroke="#d0d0d0" stroke-width="4" opacity="0.65"/>
-    <circle r="41" fill="none" stroke="#d0d0d0" stroke-width="3.5" opacity="0.55"/>
-    <circle r="20" fill="none" stroke="#d0d0d0" stroke-width="3" opacity="0.45"/>
+      <!-- Ring 2 -->
+      <circle r="105" stroke="#ffffff" stroke-width="2.5" opacity="0.07"/>
+      <path d="M 105,0 A 105,105 0 0,1 -52.5,90.9" stroke="#ffffff" stroke-width="4" opacity="0.35"/>
+      <path d="M -105,0 A 105,105 0 0,1 0,-105" stroke="#ffffff" stroke-width="4" opacity="0.25"/>
 
-    <!-- Bitcoin symbol in center -->
-    <g transform="translate(-18, -30)" filter="url(#btc-glow)">
+      <!-- Ring 3 -->
+      <circle r="80" stroke="#ffffff" stroke-width="2" opacity="0.06"/>
+      <path d="M 0,80 A 80,80 0 0,1 -80,0" stroke="#ffffff" stroke-width="4.5" opacity="0.4"/>
+      <path d="M 56.6,-56.6 A 80,80 0 0,1 80,0" stroke="#ffffff" stroke-width="4.5" opacity="0.3"/>
+
+      <!-- Ring 4 -->
+      <circle r="56" stroke="#ffffff" stroke-width="1.5" opacity="0.05"/>
+      <path d="M -56,0 A 56,56 0 0,1 56,0" stroke="#ffffff" stroke-width="4.5" opacity="0.45"/>
+      <path d="M 39.6,39.6 A 56,56 0 0,1 -39.6,39.6" stroke="#ffffff" stroke-width="4.5" opacity="0.35"/>
+    </g>
+
+    <!-- Bitcoin ₿ symbol -->
+    <g filter="url(#glow)">
       <!-- Vertical bars -->
-      <rect x="8" y="0" width="4" height="60" rx="2" fill="#E8920B"/>
-      <rect x="22" y="0" width="4" height="60" rx="2" fill="#E8920B"/>
+      <rect x="-10" y="-32" width="3.5" height="64" rx="1.75" fill="url(#btc-grad)"/>
+      <rect x="6.5" y="-32" width="3.5" height="64" rx="1.75" fill="url(#btc-grad)"/>
 
-      <!-- B shape - top -->
-      <path d="M3,10 L24,10 C34,10 38,15 38,22 C38,29 34,32 24,32 L3,32 Z"
-            fill="none" stroke="#E8920B" stroke-width="4.5" stroke-linejoin="round"/>
-
-      <!-- B shape - bottom -->
-      <path d="M3,30 L26,30 C37,30 42,35 42,42 C42,49 37,53 26,53 L3,53 Z"
-            fill="none" stroke="#E8920B" stroke-width="4.5" stroke-linejoin="round"/>
+      <!-- B top lobe -->
+      <path d="M -18,-24 L 7,-24 C 19,-24 25,-19 25,-13 C 25,-7 19,-2 7,-2 L -18,-2 Z"
+            fill="url(#btc-grad)" opacity="0.95"/>
+      <!-- B bottom lobe -->
+      <path d="M -18,-4 L 10,-4 C 23,-4 29,2 29,9 C 29,16 23,22 10,22 L -18,22 Z"
+            fill="url(#btc-grad)" opacity="0.95"/>
+      <!-- Inner cutouts -->
+      <path d="M -12,-18 L 5,-18 C 12,-18 16,-16 16,-13 C 16,-10 12,-8 5,-8 L -12,-8 Z"
+            fill="#111111"/>
+      <path d="M -12,2 L 8,2 C 16,2 20,5 20,9 C 20,13 16,16 8,16 L -12,16 Z"
+            fill="#111111"/>
     </g>
   </g>
 
   <!-- VEILED text -->
-  <text x="470" y="185" font-family="'Arial Black', 'Impact', 'Helvetica Neue', sans-serif"
-        font-size="120" font-weight="900" fill="#ffffff" text-anchor="middle"
-        letter-spacing="8" filter="url(#text-shadow)">VEILED</text>
+  <text x="540" y="182" font-family="'Arial Black', 'Impact', 'Helvetica Neue', sans-serif"
+        font-size="118" font-weight="900" fill="#ffffff" text-anchor="middle"
+        letter-spacing="10" filter="url(#text-depth)">VEILED</text>
 
-  <!-- Orange accent line -->
-  <line x1="270" y1="210" x2="670" y2="210" stroke="#E8920B" stroke-width="3"/>
+  <!-- Accent line -->
+  <rect x="330" y="208" width="420" height="2.5" rx="1.25" fill="url(#line-grad)"/>
 
-  <!-- Subtitle -->
-  <text x="470" y="245" font-family="'Arial', 'Helvetica Neue', sans-serif"
-        font-size="22" fill="#E8920B" text-anchor="middle"
-        letter-spacing="12" font-weight="400">PSEUDONYMOUS  ·  PAYMENTS</text>
+  <!-- Tagline -->
+  <text x="540" y="243" font-family="'Segoe UI', 'Arial', 'Helvetica Neue', sans-serif"
+        font-size="20" fill="#F5A623" text-anchor="middle"
+        letter-spacing="14" font-weight="300">PSEUDONYMOUS  ·  PAYMENTS</text>
 </svg>
