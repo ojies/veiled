@@ -1,6 +1,7 @@
-use crate::core::crs::{Crs, Merchant};
+use crate::core::registry::Registry;
 use crate::core::tx::{build_identity_tree, IdentityTXO, IdentityTree};
 use crate::core::types::{Commitment, Name};
+use crate::core::Merchant;
 use bitcoin::{Amount, OutPoint};
 use std::collections::HashMap;
 
@@ -20,7 +21,7 @@ pub struct MerchantInfo {
 }
 
 pub struct FinalizedSet {
-    pub crs: Crs,
+    pub registry: Registry,
     pub tree: IdentityTree,
 }
 
@@ -66,6 +67,8 @@ impl RegistryStore {
                         name,
                         credential_generator,
                         origin,
+                        merchant_id: 0,
+                        registered_identities: HashMap::new(),
                     },
                     email,
                     phone,
@@ -182,8 +185,15 @@ impl RegistryStore {
             merchants.push(m_info.merchant.clone());
         }
 
-        // 2. Setup CRS
-        let crs = Crs::setup(merchants);
+        // 2. Setup Registry
+        let mut registry = Registry::new(self.beneficiary_capacity);
+        for m in merchants {
+            registry.add_merchant(m);
+        }
+        registry.setup();
+        for b in beneficiaries.iter() {
+            registry.add_beneficiary(b.phi);
+        }
 
         // 3. Build VTxO tree
         let sats_per_user = 10_000;
@@ -202,7 +212,7 @@ impl RegistryStore {
             .map_err(|e| format!("Failed to build VTxO tree: {}", e))?;
 
         self.finalized_sets
-            .insert(set_id, FinalizedSet { crs, tree });
+            .insert(set_id, FinalizedSet { registry, tree });
 
         Ok(())
     }
