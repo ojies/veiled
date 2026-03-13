@@ -25,6 +25,12 @@ pub struct RegistryStore {
     pub active_sets: HashMap<u64, ActiveSet>,
 }
 
+impl Default for RegistryStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RegistryStore {
     pub fn new() -> Self {
         Self {
@@ -123,8 +129,7 @@ impl RegistryStore {
         if active_set
             .registry
             .anonymity_set()
-            .iter()
-            .any(|c| *c == phi)
+            .contains(&phi)
         {
             return Err("Beneficiary already registered in this set".to_string());
         }

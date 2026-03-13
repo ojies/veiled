@@ -38,7 +38,7 @@ impl Registry for RegistryService {
         let mut store = self.store.lock().await;
         store
             .register_merchant(&req.name, &req.origin, req.email, req.phone)
-            .map_err(|e| Status::already_exists(e))?;
+            .map_err(Status::already_exists)?;
         Ok(Response::new(MerchantResponse {
             message: format!("Merchant '{}' registered", req.name),
         }))
@@ -56,7 +56,7 @@ impl Registry for RegistryService {
                 &req.merchant_names,
                 req.beneficiary_capacity as usize,
             )
-            .map_err(|e| Status::invalid_argument(e))?;
+            .map_err(Status::invalid_argument)?;
         Ok(Response::new(CreateSetResponse {
             message: format!("Set {} created", req.set_id),
         }))
@@ -76,7 +76,7 @@ impl Registry for RegistryService {
         let mut store = self.store.lock().await;
         let index = store
             .register_beneficiary(req.set_id, phi)
-            .map_err(|e| Status::invalid_argument(e))?;
+            .map_err(Status::invalid_argument)?;
 
         Ok(Response::new(BeneficiaryResponse {
             message: "Beneficiary registered".to_string(),
@@ -108,7 +108,7 @@ impl Registry for RegistryService {
         let mut store = self.store.lock().await;
         store
             .finalize_set(req.set_id, req.sats_per_user, funding_outpoint)
-            .map_err(|e| Status::failed_precondition(e))?;
+            .map_err(Status::failed_precondition)?;
 
         Ok(Response::new(FinalizeSetResponse {
             message: format!("Set {} finalized", req.set_id),
@@ -140,7 +140,7 @@ impl Registry for RegistryService {
         let store = self.store.lock().await;
         let registry = store
             .get_crs(req.set_id)
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
         let crs_bytes = registry.crs.to_bytes();
         Ok(Response::new(GetCrsResponse { crs_bytes }))
     }
@@ -153,7 +153,7 @@ impl Registry for RegistryService {
         let store = self.store.lock().await;
         let active_set = store
             .get_anonymity_set(req.set_id)
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
 
         let commitments: Vec<Vec<u8>> = active_set
             .registry
@@ -178,7 +178,7 @@ impl Registry for RegistryService {
         let store = self.store.lock().await;
         let tree = store
             .get_vtxo_tree(req.set_id)
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
 
         let mut root_tx_bytes = Vec::new();
         tree.root()
