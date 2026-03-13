@@ -20,3 +20,4 @@ target/
 .trash
 .claude
 .bitcoin-regtest
+.wallets

@@ -112,9 +112,6 @@ services:
       # Protocol configuration
       - BENEFICIARY_CAPACITY=2
       - MIN_MERCHANTS=1
-      - MERCHANT_REGISTRATION_FEE=3000
-      - DEFAULT_SATS_PER_USER=2000
-      - BENEFICIARY_REGISTRATION_FEE=2000
       - MERCHANT_START_PORT=50061
     volumes:
       - wallets:/app/data/wallets

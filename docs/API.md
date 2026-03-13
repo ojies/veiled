@@ -12,9 +12,9 @@ routes via the Next.js web UI, and a wallet CLI binary.
 | RPC | Request | Response | Description |
 |-----|---------|----------|-------------|
 | `RegisterMerchant` | name, origin, email, phone | message | Register a merchant (rejects duplicates) |
-| `CreateSet` | set_id, merchant_names, beneficiary_capacity | message | Create anonymity set with CRS |
-| `RegisterBeneficiary` | set_id, phi (33 bytes), name, email, phone | message, index | Register commitment in set |
-| `FinalizeSet` | set_id, sats_per_user, funding_txid, funding_vout | message | Seal set and build VTxO tree |
+| `CreateSet` | set_id, merchant_names, beneficiary_capacity, sats_per_user | message | Create anonymity set with CRS |
+| `RegisterBeneficiary` | set_id, phi (33 bytes), name, email, phone, funding_txid, funding_vout | message, index | Pay fee + register commitment in set (verifies payment on-chain) |
+| `FinalizeSet` | set_id, sats_per_user, funding_txid, funding_vout | message, root_txid, fanout_txid | Seal set, sign + broadcast VTxO tree |
 
 ### Queries
 
@@ -24,6 +24,9 @@ routes via the Next.js web UI, and a wallet CLI binary.
 | `GetCrs` | set_id | crs_bytes | Get serialized CRS for a set |
 | `GetAnonymitySet` | set_id | commitments[], finalized, count, capacity | Get set status and commitments |
 | `GetVtxoTree` | set_id | root_tx, fanout_tx | Get consensus-encoded Bitcoin transactions |
+| `GetRegistryAddress` | set_id | address, internal_key | Get registry's P2TR payment address |
+| `GetAggregateAddress` | set_id | address, aggregate_key | Get aggregate P2TR address for VTxO funding |
+| `GetFees` | — | beneficiary_fee, merchant_fee | Get registration fee amounts (sats) |
 
 ### Streaming
 
@@ -58,14 +61,17 @@ message CreateSetRequest {
   uint64 set_id = 1;
   repeated string merchant_names = 2;
   uint32 beneficiary_capacity = 3;
+  uint64 sats_per_user = 4;
 }
 
 message BeneficiaryRequest {
   uint64 set_id = 1;
-  bytes phi = 2;       // 33-byte commitment
+  bytes phi = 2;           // 33-byte commitment
   string name = 3;
   string email = 4;
   string phone = 5;
+  bytes funding_txid = 6;  // 32-byte txid of fee payment
+  uint32 funding_vout = 7; // output index within fee payment tx
 }
 
 message FinalizeSetRequest {
@@ -73,6 +79,27 @@ message FinalizeSetRequest {
   uint64 sats_per_user = 2;
   bytes funding_txid = 3;   // 32-byte txid
   uint32 funding_vout = 4;
+}
+
+message FinalizeSetResponse {
+  string message = 1;
+  string root_txid = 2;    // broadcast root transaction ID
+  string fanout_txid = 3;  // broadcast fanout transaction ID
+}
+
+message GetRegistryAddressResponse {
+  string address = 1;       // P2TR bech32m address (bcrt1p... on regtest)
+  bytes internal_key = 2;   // 32-byte x-only public key
+}
+
+message GetAggregateAddressResponse {
+  string address = 1;       // P2TR bech32m address for the aggregate key
+  bytes aggregate_key = 2;  // 32-byte x-only aggregate public key
+}
+
+message GetFeesResponse {
+  uint64 beneficiary_fee = 1;  // sats required per beneficiary registration
+  uint64 merchant_fee = 2;     // sats required per merchant registration
 }
 
 message GetAnonymitySetResponse {
@@ -143,8 +170,8 @@ to gRPC services, Rust helper binaries, and the Bitcoin wallet.
 | Route | Method | Input | Description |
 |-------|--------|-------|-------------|
 | `/api/beneficiary/credential` | POST | `{ name }` | Create ZK credential (master identity) |
-| `/api/beneficiary/register` | POST | `{ name }` | Register Φ with the anonymity set |
-| `/api/beneficiary/finalize` | POST | `{ name }` | Finalize set with real funding UTXO |
+| `/api/beneficiary/register` | POST | `{ name }` | Pay fee + register Φ with the anonymity set |
+| `/api/beneficiary/finalize` | POST | `{ name }` | Fund VTxO tree, finalize set, sign + broadcast txs |
 | `/api/beneficiary/payment-id` | POST | `{ beneficiary, merchant }` | Register payment identity (ZK proof) |
 | `/api/beneficiary/payment` | POST | `{ beneficiary, merchant, amount }` | Request payment from merchant (Schnorr proof) |
 | `/api/beneficiary/merchants` | GET | — | List registered merchants from registry |

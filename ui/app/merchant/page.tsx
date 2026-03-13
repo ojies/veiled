@@ -44,6 +44,7 @@ export default function MerchantPage() {
   const [regLoading, setRegLoading] = useState(false);
   const [walletBalance, setWalletBalance] = useState(0);
   const [walletLoading, setWalletLoading] = useState(false);
+  const [fees, setFees] = useState<{ beneficiary: number; merchant: number } | null>(null);
 
   // Dashboard
   const [identities, setIdentities] = useState<Identity[]>([]);
@@ -52,6 +53,16 @@ export default function MerchantPage() {
   const [sendingTo, setSendingTo] = useState<string | null>(null);
 
   const activeStep = !walletCreated ? 0 : !registered ? 1 : 2;
+
+  // Fetch fees from registry on mount
+  useEffect(() => {
+    fetch("/api/setup/init", { method: "POST" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.fees) setFees(data.fees);
+      })
+      .catch(() => {});
+  }, []);
 
   // Create wallet on name entry
   async function createWallet() {
@@ -119,6 +130,13 @@ export default function MerchantPage() {
   // Register merchant (spawn gRPC server)
   async function registerMerchant() {
     if (!merchantName.trim() || !merchantOrigin.trim()) return;
+    if (fees && walletBalance < fees.merchant) {
+      toast(
+        `Insufficient balance: need ${fees.merchant.toLocaleString()} sats, have ${walletBalance.toLocaleString()}. Fund your wallet first.`,
+        "error"
+      );
+      return;
+    }
     setRegLoading(true);
     try {
       const res = await fetch("/api/merchant/create", {
@@ -135,8 +153,18 @@ export default function MerchantPage() {
       setServerStatus(data.status);
       setServerPort(data.port);
       toast(`Merchant "${merchantName}" registered and server started`, "success");
+      await refreshBalance();
     } catch (e: any) {
-      toast(e.message, "error");
+      const msg = e.message || "Registration failed";
+      if (msg.includes("already")) {
+        toast("Merchant already registered", "error");
+      } else if (msg.includes("insufficient") || msg.includes("amount")) {
+        toast("Insufficient funds for registration fee. Use faucet to top up.", "error");
+      } else if (msg.includes("UNAVAILABLE") || msg.includes("connect")) {
+        toast("Cannot reach registry server", "error");
+      } else {
+        toast(msg, "error");
+      }
     }
     setRegLoading(false);
   }
@@ -289,7 +317,7 @@ export default function MerchantPage() {
           </button>
         </div>
         <p style={{ color: "#888", fontSize: "0.8rem" }}>
-          Registration fee: 5,000 sats. This spawns a gRPC merchant server.
+          Registration fee: {fees ? fees.merchant.toLocaleString() : "..."} sats. This spawns a gRPC merchant server.
         </p>
         {registered && (
           <div style={{ marginTop: "0.75rem" }}>

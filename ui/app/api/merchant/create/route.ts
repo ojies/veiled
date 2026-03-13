@@ -5,8 +5,8 @@ import { spawn } from "child_process";
 import path from "path";
 import { getState, addMerchantProcess } from "@/lib/state";
 import { createWallet, getBalance, send, faucet } from "@/lib/wallet";
+import { getRegistryClient, grpcCall } from "@/lib/grpc";
 import {
-  MERCHANT_REGISTRATION_FEE,
   MERCHANT_START_PORT,
   MERCHANT_STARTUP_DELAY,
   MATURITY_BLOCKS,
@@ -45,6 +45,11 @@ export async function POST(request: Request) {
       });
     }
 
+    // Fetch merchant fee from registry
+    const registry = getRegistryClient();
+    const feesResp: any = await grpcCall(registry, "GetFees", {});
+    const merchantFee = feesResp.merchant_fee;
+
     // Create wallet for this merchant
     const walletName = `merchant-${name.toLowerCase().replace(/\s+/g, "-")}`;
     const wallet = createWallet(walletName);
@@ -54,14 +59,8 @@ export async function POST(request: Request) {
     const dummyWallet = createWallet("faucet-miner");
     faucet(dummyWallet.address, MATURITY_BLOCKS);
     if (state.registry_address) {
-      try {
-        send(walletName, state.registry_address, MERCHANT_REGISTRATION_FEE);
-        // Mine a block to confirm
-        faucet(dummyWallet.address, 1);
-      } catch (e: any) {
-        // Log but don't fail — registry might not need fee in demo mode
-        console.warn(`Fee payment failed: ${e.message}`);
-      }
+      send(walletName, state.registry_address, merchantFee);
+      faucet(dummyWallet.address, 1);
     }
 
     // Find available port

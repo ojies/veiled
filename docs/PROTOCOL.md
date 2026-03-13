@@ -77,18 +77,26 @@ secrets plus the public CRS.
 
 ## Phase 2 — Registration and Anonymity Set Finalization
 
-The beneficiary registers their commitment Φ with the registry via gRPC,
-then subscribes to a server-streaming RPC to wait for the anonymity set to
-finalize:
+The beneficiary pays a registration fee to the registry's P2TR address, then
+registers their commitment Φ along with the payment outpoint. The registry
+verifies the on-chain payment before admitting the beneficiary:
 
 ```
-RegisterBeneficiary(set_id, Φ, name)  →  index
+GetFees()                             →  beneficiary_fee, merchant_fee
+GetRegistryAddress(set_id)            →  address, internal_key
+<pay beneficiary_fee to registry address>
+RegisterBeneficiary(set_id, Φ, name, funding_txid, funding_vout)  →  index
 SubscribeSetFinalization(set_id)      →  stream(anonymity_set)
 GetVtxoTree(set_id)                   →  (root_tx, fanout_tx)
 ```
 
+The registry fetches the referenced transaction via `getrawtransaction`,
+verifies the output at `funding_vout` pays the correct P2TR address with at
+least `beneficiary_fee` sats, then adds Φ to the anonymity set.
+
 Once the set reaches its capacity, it is **finalized** — sealed permanently
-with no further additions or removals. The registry builds a **VTxO tree**:
+with no further additions or removals. The registry signs both transactions
+with the aggregate key and broadcasts them. It then builds a **VTxO tree**:
 
 ```
             [Root TX]  ← single UTXO broadcast on Bitcoin
@@ -104,12 +112,17 @@ subscribers are notified via the streaming RPC. The beneficiary downloads
 the frozen anonymity set and VTxO tree — both are needed for proof
 generation.
 
-### Funding
+### Funding and broadcast
 
-In the web UI flow, beneficiaries pay a registration fee to the registry
-wallet. The registry's collected fees form the funding UTXO for the VTxO
-tree. The finalization step uses this real Bitcoin UTXO as the tree's root
-input.
+Beneficiaries and merchants pay registration fees to the registry's P2TR
+address (queried via `GetRegistryAddress`). Fee amounts are configured on the
+registry and queried via `GetFees`. The registry verifies each payment
+on-chain before admitting participants.
+
+The collected fees fund the VTxO tree. At finalization, the funding UTXO is
+sent to the **aggregate address** (derived from all beneficiary pubkeys via
+`GetAggregateAddress`). The registry signs both `root_tx` and `fanout_tx`
+with the aggregate secret key and broadcasts them to the Bitcoin network.
 
 ---
 

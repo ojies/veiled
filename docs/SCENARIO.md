@@ -103,20 +103,33 @@ plus the public CRS.
 
 ## Phase 2 — Alice Registers and Waits for Finalization
 
-### Step 1: Register Φ with the registry
+### Step 1: Pay registration fee and register Φ
+
+Alice first queries the registry for its payment address and fee:
+
+```
+GetFees() → { beneficiary_fee: 2000, merchant_fee: 3000 }
+GetRegistryAddress { set_id: 1 } → { address: "bcrt1p...", internal_key: <32 bytes> }
+```
+
+She sends 2,000 sats to the registry's P2TR address, then registers with the
+payment outpoint so the registry can verify on-chain:
 
 ```
 RegisterBeneficiary {
     set_id: 1,
-    phi: Φ,            # 33-byte commitment
-    name: "alice"
+    phi: Φ,                    # 33-byte commitment
+    name: "alice",
+    funding_txid: <32 bytes>,  # txid of fee payment
+    funding_vout: 0            # output index paying the registry
 }
 → BeneficiaryResponse { index: 0 }
 ```
 
-The registry appends Φ to the anonymity set for set 1 and returns Alice's
-index. The set has capacity 8 — once 8 beneficiaries register, the set can
-be finalized.
+The registry fetches the referenced transaction, verifies the output pays the
+correct address with at least 2,000 sats, then appends Φ to the anonymity
+set. The set has capacity 8 — once 8 beneficiaries register, the set can be
+finalized.
 
 ### Step 2: Subscribe to finalization
 
@@ -134,25 +147,33 @@ register their own commitments Φ_2 through Φ_8.
 
 ### Step 3: Set finalization
 
-An admin finalizes the set once all 8 beneficiaries have registered:
+The set is finalized once all 8 beneficiaries have registered. The funding
+UTXO is sent to the **aggregate address** — a P2TR address derived from all
+beneficiary pubkeys:
 
 ```
+GetAggregateAddress { set_id: 1 } → { address: "bcrt1p...", aggregate_key: <32 bytes> }
+<send funding to aggregate address>
+
 FinalizeSet {
     set_id: 1,
-    sats_per_user: 10_000,
+    sats_per_user: 2_000,
     funding_txid: <32-byte txid>,
     funding_vout: 0
 }
+→ FinalizeSetResponse { root_txid: "abc...", fanout_txid: "def..." }
 ```
 
 The registry:
 1. **Seals** the anonymity set (frozen permanently — no additions or removals)
-2. Builds a **VTxO tree** from all 8 commitments:
+2. Builds a **VTxO tree** from all 8 commitments
+3. **Signs** both `root_tx` and `fanout_tx` with the aggregate secret key
+4. **Broadcasts** both transactions to the Bitcoin network
 
 ```
-            [Root TX]  ← single UTXO broadcast on Bitcoin
+            [Root TX]  ← broadcast on Bitcoin, spends funding UTXO
            /          \
-     [Fanout TX]      ...
+     [Fanout TX]      ...   ← broadcast on Bitcoin, spends root output
      /    |    \
   [Φ_1] [Φ_2] ... [Φ_8]   ← 8 P2TR outputs, one per beneficiary
 ```
@@ -160,7 +181,7 @@ The registry:
 Each leaf is a P2TR output whose internal key is the beneficiary's Φ. This
 works because Φ is already a valid compressed secp256k1 public key.
 
-3. Notifies all subscribers via the streaming RPC
+5. Notifies all subscribers via the streaming RPC
 
 ### Step 4: Alice receives the finalized set
 

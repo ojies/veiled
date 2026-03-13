@@ -4,7 +4,6 @@ import { NextResponse } from "next/server";
 import { getRegistryClient, grpcCall } from "@/lib/grpc";
 import { getState, getBeneficiary, updateBeneficiary, setAnonymitySet, setPhase } from "@/lib/state";
 import { send, faucet, createWallet, getTx } from "@/lib/wallet";
-import { BENEFICIARY_REGISTRATION_FEE } from "@/lib/config";
 
 export async function POST(request: Request) {
   try {
@@ -28,15 +27,17 @@ export async function POST(request: Request) {
     const registry = getRegistryClient();
     const phi = Buffer.from(ben.credential.phi, "hex");
 
-    // Step 1: Query the registry's payment address for this set
-    const addrResp: any = await grpcCall(registry, "GetRegistryAddress", {
-      set_id: state.set_id,
-    });
+    // Step 1: Query the registry's payment address and fees
+    const [addrResp, feesResp]: any[] = await Promise.all([
+      grpcCall(registry, "GetRegistryAddress", { set_id: state.set_id }),
+      grpcCall(registry, "GetFees", {}),
+    ]);
     const registryAddress = addrResp.address;
+    const beneficiaryFee = feesResp.beneficiary_fee;
 
     // Step 2: Send payment from beneficiary's wallet to registry address
     const walletName = `beneficiary-${name.toLowerCase().replace(/\s+/g, "-")}`;
-    const sendResult = send(walletName, registryAddress, BENEFICIARY_REGISTRATION_FEE);
+    const sendResult = send(walletName, registryAddress, beneficiaryFee);
     const fundingTxid = sendResult.txid;
 
     // Step 3: Mine a block to confirm (regtest only)
@@ -93,7 +94,7 @@ export async function POST(request: Request) {
       payment: {
         txid: fundingTxid,
         vout: fundingVout,
-        amount: BENEFICIARY_REGISTRATION_FEE,
+        amount: beneficiaryFee,
         registry_address: registryAddress,
       },
     });

@@ -2,10 +2,11 @@ use crate::core::types::Commitment;
 use crate::registry::pb::registry_server::Registry;
 use crate::registry::pb::{
     BeneficiaryRequest, BeneficiaryResponse, CreateSetRequest, CreateSetResponse,
-    FinalizeSetRequest, FinalizeSetResponse, GetAnonymitySetRequest, GetAnonymitySetResponse,
-    GetCrsRequest, GetCrsResponse, GetMerchantsRequest, GetMerchantsResponse,
-    GetRegistryAddressRequest, GetRegistryAddressResponse, GetVtxoTreeRequest,
-    GetVtxoTreeResponse, MerchantEntry, MerchantRequest, MerchantResponse,
+    FinalizeSetRequest, FinalizeSetResponse, GetAggregateAddressRequest,
+    GetAggregateAddressResponse, GetAnonymitySetRequest, GetAnonymitySetResponse,
+    GetCrsRequest, GetCrsResponse, GetFeesRequest, GetFeesResponse, GetMerchantsRequest,
+    GetMerchantsResponse, GetRegistryAddressRequest, GetRegistryAddressResponse,
+    GetVtxoTreeRequest, GetVtxoTreeResponse, MerchantEntry, MerchantRequest, MerchantResponse,
 };
 use crate::registry::store::RegistryStore;
 use bitcoin::consensus::Encodable;
@@ -121,12 +122,14 @@ impl Registry for RegistryService {
         };
 
         let mut store = self.store.lock().await;
-        store
+        let (root_txid, fanout_txid) = store
             .finalize_set(req.set_id, req.sats_per_user, funding_outpoint)
             .map_err(Status::failed_precondition)?;
 
         Ok(Response::new(FinalizeSetResponse {
             message: format!("Set {} finalized", req.set_id),
+            root_txid,
+            fanout_txid,
         }))
     }
 
@@ -223,6 +226,33 @@ impl Registry for RegistryService {
         Ok(Response::new(GetRegistryAddressResponse {
             address,
             internal_key,
+        }))
+    }
+
+    async fn get_aggregate_address(
+        &self,
+        request: Request<GetAggregateAddressRequest>,
+    ) -> Result<Response<GetAggregateAddressResponse>, Status> {
+        let req = request.into_inner();
+        let store = self.store.lock().await;
+        let (address, aggregate_key) = store
+            .get_aggregate_address(req.set_id)
+            .map_err(Status::failed_precondition)?;
+        Ok(Response::new(GetAggregateAddressResponse {
+            address,
+            aggregate_key,
+        }))
+    }
+
+    async fn get_fees(
+        &self,
+        _request: Request<GetFeesRequest>,
+    ) -> Result<Response<GetFeesResponse>, Status> {
+        let store = self.store.lock().await;
+        let fees = store.get_fees();
+        Ok(Response::new(GetFeesResponse {
+            beneficiary_fee: fees.min_sats_per_user,
+            merchant_fee: fees.merchant_registration_fee,
         }))
     }
 

@@ -209,6 +209,9 @@ Test coverage:
 - [x] `veiled-helper` CLI bridge for Rust crypto operations from the web UI
 - [x] `veiled-wallet` BDK-based wallet binary (BIP86 P2TR, local key management, no bitcoind wallets)
 - [x] Full protocol simulation (`demo`) with 3 merchants and 8 beneficiaries
+- [x] On-chain registration fee verification (beneficiary + merchant)
+- [x] VTxO tree signing and broadcast (aggregate key, `root_tx` + `fanout_tx`)
+- [x] Dynamic fee configuration via registry `GetFees` RPC
 
 ### Phase 3-4 improvements (Payment Identity Registration)
 - [ ] Per-merchant nullifier duplicate rejection in the merchant service (currently verified in core but not enforced at the gRPC layer)

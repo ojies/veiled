@@ -58,6 +58,9 @@ export default function BeneficiaryPage() {
   const [walletCreated, setWalletCreated] = useLocalState("ben:walletCreated", false);
   const [registryAddress, setRegistryAddress] = useLocalState("ben:registryAddr", "");
 
+  // Fee config from server
+  const [fees, setFees] = useState<{ beneficiary: number; merchant: number } | null>(null);
+
   // Ephemeral state (no persistence needed)
   const [merchants, setMerchants] = useState<Merchant[]>([]);
   const [selectedMerchant, setSelectedMerchant] = useState("");
@@ -89,6 +92,7 @@ export default function BeneficiaryPage() {
       try {
         const res = await fetch("/api/setup/init", { method: "POST" });
         const data = await res.json();
+        if (data.fees) setFees(data.fees);
         if (data.waiting) {
           setInitWaiting(true);
         } else {
@@ -116,6 +120,7 @@ export default function BeneficiaryPage() {
         setInitWaiting(false);
         setInitDone(true);
         setRegistryAddress(data.registry_address || "");
+        if (data.fees) setFees(data.fees);
         if (data.merchants) {
           setMerchants(data.merchants);
           if (data.merchants.length) setSelectedMerchant(data.merchants[0].name);
@@ -218,17 +223,38 @@ export default function BeneficiaryPage() {
   async function registerWithRegistry() {
     setLoading("register");
     try {
-      // Payment is handled internally by the register API route
+      // Check balance before attempting registration
+      if (fees && walletBalance < fees.beneficiary) {
+        toast(
+          `Insufficient balance: need ${fees.beneficiary.toLocaleString()} sats, have ${walletBalance.toLocaleString()}. Fund your wallet first.`,
+          "error"
+        );
+        setLoading("");
+        return;
+      }
+
       const data = await api("/api/beneficiary/register", { name: name.trim() });
       setRegIndex(data.index);
       setSetStatus({ count: data.set_count, capacity: data.set_capacity });
       toast("Registered with anonymity set", "success");
+      await refreshBalance();
 
       if (data.set_count >= data.set_capacity) {
         await finalizeSet();
       }
     } catch (e: any) {
-      toast(e.message, "error");
+      const msg = e.message || "Registration failed";
+      if (msg.includes("already registered")) {
+        toast("Already registered in this set", "error");
+      } else if (msg.includes("amount too low") || msg.includes("insufficient") || msg.includes("not enough")) {
+        toast("Insufficient funds for registration fee. Use the faucet to top up.", "error");
+      } else if (msg.includes("full")) {
+        toast("Anonymity set is full", "error");
+      } else if (msg.includes("UNAVAILABLE") || msg.includes("connect")) {
+        toast("Cannot reach registry server", "error");
+      } else {
+        toast(msg, "error");
+      }
     }
     setLoading("");
   }
@@ -378,11 +404,9 @@ export default function BeneficiaryPage() {
       >
         {regIndex === null ? (
           <div>
-            {registryAddress && (
-              <p style={{ color: "#888", fontSize: "0.85rem", marginBottom: "0.75rem" }}>
-                Registration fee: 10,000 sats to registry
-              </p>
-            )}
+            <p style={{ color: "#888", fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+              Registration fee: {fees ? fees.beneficiary.toLocaleString() : "..."} sats to registry
+            </p>
             <button className="btn" onClick={registerWithRegistry} disabled={!!loading}>
               {loading === "register" ? "Registering..." : "Pay & Register"}
             </button>

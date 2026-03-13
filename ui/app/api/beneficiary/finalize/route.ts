@@ -4,8 +4,6 @@ import { NextResponse } from "next/server";
 import { getRegistryClient, grpcCall } from "@/lib/grpc";
 import { getState, setAnonymitySet, setPhase, setFunding } from "@/lib/state";
 import { getBalance, send, faucet, createWallet } from "@/lib/wallet";
-import { DEFAULT_SATS_PER_USER } from "@/lib/config";
-
 export async function POST(request: Request) {
   try {
     const state = getState();
@@ -16,41 +14,51 @@ export async function POST(request: Request) {
     // The registry has collected fees from merchants + beneficiaries
     const registryBalance = getBalance("registry");
 
-    // Calculate sats per user from registry balance
-    const setResp: any = await grpcCall(registry, "GetAnonymitySet", {
-      set_id: state.set_id,
-    });
+    // Fetch fees + anonymity set in parallel
+    const [feesResp, setResp]: any[] = await Promise.all([
+      grpcCall(registry, "GetFees", {}),
+      grpcCall(registry, "GetAnonymitySet", { set_id: state.set_id }),
+    ]);
     const count = setResp.count || 1;
-    const satsPerUser = Math.floor(registryBalance.confirmed / count) || DEFAULT_SATS_PER_USER;
+    const satsPerUser = Math.floor(registryBalance.confirmed / count) || feesResp.beneficiary_fee;
 
-    // Send the funding amount to registry's own address (creates UTXO)
-    // In a real system this would go to the VTxO tree address
+    // Send funding to the aggregate key address (the address the root_tx spends from)
     const fundingAmount = satsPerUser * count;
 
     let fundingTxid: string;
     let fundingVout = 0;
 
     if (body.funding_txid) {
-      // Use provided funding txid
       fundingTxid = body.funding_txid;
       fundingVout = body.funding_vout || 0;
     } else {
-      // Create a self-send to generate a UTXO
-      const result = send("registry", state.registry_address || "", fundingAmount);
+      // Get the aggregate address (derived from all beneficiary pubkeys)
+      const aggResp: any = await grpcCall(registry, "GetAggregateAddress", {
+        set_id: state.set_id,
+      });
+      const aggregateAddress = aggResp.address;
+
+      // Send funding from registry wallet to the aggregate address
+      const result = send("registry", aggregateAddress, fundingAmount);
       fundingTxid = result.txid;
-      // Mine a block to confirm
+
+      // Mine a block to confirm the funding UTXO
       const miner = createWallet("faucet-miner");
       faucet(miner.address, 1);
     }
 
-    // Finalize the set with the real funding UTXO
+    // Finalize — the registry signs and broadcasts root_tx + fanout_tx
     const txidBytes = Buffer.from(fundingTxid, "hex");
-    await grpcCall(registry, "FinalizeSet", {
+    const finalizeResp: any = await grpcCall(registry, "FinalizeSet", {
       set_id: state.set_id,
       sats_per_user: satsPerUser,
       funding_txid: txidBytes,
       funding_vout: fundingVout,
     });
+
+    // Mine a block to confirm the broadcast commitment transactions
+    const confirmMiner = createWallet("faucet-miner");
+    faucet(confirmMiner.address, 1);
 
     setFunding(fundingTxid, fundingVout, fundingAmount);
 
@@ -85,6 +93,8 @@ export async function POST(request: Request) {
       vtxo: {
         root_tx_size: vtxoResp.root_tx?.length || 0,
         fanout_tx_size: vtxoResp.fanout_tx?.length || 0,
+        root_txid: finalizeResp.root_txid || "",
+        fanout_txid: finalizeResp.fanout_txid || "",
       },
     });
   } catch (err: any) {

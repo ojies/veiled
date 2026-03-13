@@ -82,6 +82,7 @@ veiled/
 │   │   ├── ToastProvider.tsx         # Toast context provider
 │   │   └── FaucetButton.tsx          # Fund all wallets via regtest mining
 │   └── lib/
+│       ├── config.ts                  # Centralized configuration (env var overrides)
 │       ├── grpc.ts                    # gRPC client (@grpc/grpc-js)
 │       ├── helper.ts                  # veiled-helper CLI wrapper
 │       ├── wallet.ts                  # veiled-wallet CLI wrapper

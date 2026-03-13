@@ -54,8 +54,12 @@ wallet creation is needed. Chain data (UTXOs, balances) is synced from bitcoind
 via `bdk_bitcoind_rpc`'s `Emitter` pattern (block-by-block + mempool):
 
 - **Registry** — wallet created by `dev.sh` on startup, collects registration fees
-- **Merchants** — wallet created when registering through the UI, pays 5,000 sats registration fee, sends payments to beneficiaries
-- **Beneficiaries** — wallet auto-created with credential, pays 10,000 sats registration fee, receives payments from merchants
+- **Merchants** — wallet created when registering through the UI, pays registration fee (default 3,000 sats), sends payments to beneficiaries
+- **Beneficiaries** — wallet auto-created with credential, pays registration fee (default 2,000 sats), receives payments from merchants
+
+Fee amounts are configured on the registry server and fetched by the UI via
+the `GetFees` gRPC call — no fee-related environment variables are needed on
+the UI side.
 
 The **faucet** button mines regtest blocks to fund wallets instantly.
 
@@ -71,8 +75,8 @@ The **faucet** button mines regtest blocks to fund wallets instantly.
 | `/api/wallet/faucet` | POST | Mine blocks to fund wallets |
 | `/api/wallet/tx` | GET | Transaction details |
 | `/api/beneficiary/credential` | POST | Create ZK credential |
-| `/api/beneficiary/register` | POST | Register with anonymity set |
-| `/api/beneficiary/finalize` | POST | Finalize set with real UTXO |
+| `/api/beneficiary/register` | POST | Pay fee + register with anonymity set |
+| `/api/beneficiary/finalize` | POST | Fund VTxO tree, finalize, sign + broadcast |
 | `/api/beneficiary/payment-id` | POST | Register payment identity (ZK proof) |
 | `/api/beneficiary/payment` | POST | Request payment from merchant (Schnorr proof) |
 | `/api/beneficiary/incoming` | GET | Check incoming payments to beneficiary |
@@ -124,8 +128,6 @@ The UI expects:
 | `PROTO_DIR` | `../proto` | Directory containing .proto files |
 | `BENEFICIARY_CAPACITY` | `2` | Slots per anonymity set (must be power of 2) |
 | `MIN_MERCHANTS` | `1` | Minimum merchants before set creation |
-| `MERCHANT_REGISTRATION_FEE` | `5000` | Merchant registration fee (sats) |
-| `DEFAULT_SATS_PER_USER` | `10000` | Fallback sats-per-user for VTxO tree |
 | `MERCHANT_START_PORT` | `50061` | Starting port for merchant gRPC servers |
 | `MERCHANT_STARTUP_DELAY` | `1500` | Wait time (ms) after spawning merchant |
 | `MATURITY_BLOCKS` | `100` | Blocks mined to mature coinbase outputs |

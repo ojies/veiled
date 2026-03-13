@@ -15,6 +15,8 @@ service Registry {
   rpc GetAnonymitySet (GetAnonymitySetRequest) returns (GetAnonymitySetResponse);
   rpc GetVtxoTree (GetVtxoTreeRequest) returns (GetVtxoTreeResponse);
   rpc GetRegistryAddress (GetRegistryAddressRequest) returns (GetRegistryAddressResponse);
+  rpc GetAggregateAddress (GetAggregateAddressRequest) returns (GetAggregateAddressResponse);
+  rpc GetFees (GetFeesRequest) returns (GetFeesResponse);
 
   // Subscriptions
   rpc SubscribeSetFinalization (GetAnonymitySetRequest) returns (stream GetAnonymitySetResponse);
@@ -68,6 +70,8 @@ message FinalizeSetRequest {
 
 message FinalizeSetResponse {
   string message = 1;
+  string root_txid = 2;
+  string fanout_txid = 3;
 }
 
 // ── Queries ────────────────────────────────────────────────
@@ -119,4 +123,20 @@ message GetRegistryAddressRequest {
 message GetRegistryAddressResponse {
   string address = 1;       // P2TR bech32m address (bcrt1p... on regtest)
   bytes internal_key = 2;   // 32-byte x-only public key
+}
+
+message GetAggregateAddressRequest {
+  uint64 set_id = 1;
+}
+
+message GetAggregateAddressResponse {
+  string address = 1;       // P2TR bech32m address for the aggregate key
+  bytes aggregate_key = 2;  // 32-byte x-only aggregate public key
+}
+
+message GetFeesRequest {}
+
+message GetFeesResponse {
+  uint64 beneficiary_fee = 1;  // sats required per beneficiary registration
+  uint64 merchant_fee = 2;     // sats required per merchant registration
 }
