@@ -185,6 +185,7 @@ fn handle_create_wallet(params: serde_json::Value) -> Result<serde_json::Value, 
 
     // Create blank descriptor wallet in bitcoind (or load if it already exists)
     let base_client = rpc_client(&rpc_url, &rpc_user, &rpc_pass, None)?;
+    let wallet_is_new;
     let create_result = base_client.call::<serde_json::Value>(
         "createwallet",
         &[
@@ -196,57 +197,65 @@ fn handle_create_wallet(params: serde_json::Value) -> Result<serde_json::Value, 
             json!(true),  // descriptors
         ],
     );
-    if let Err(e) = &create_result {
-        let msg = e.to_string();
-        if msg.contains("already exists") || msg.contains("Database already") {
-            // Wallet exists in bitcoind — try loading it
-            let _ = base_client.call::<serde_json::Value>("loadwallet", &[json!(p.name)]);
-        } else {
-            return Err(format!("createwallet: {e}"));
+    match &create_result {
+        Ok(_) => {
+            wallet_is_new = true;
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("already exists") || msg.contains("Database already") {
+                // Wallet exists in bitcoind — try loading it
+                let _ = base_client.call::<serde_json::Value>("loadwallet", &[json!(p.name)]);
+                wallet_is_new = false;
+            } else {
+                return Err(format!("createwallet: {e}"));
+            }
         }
     }
 
-    // Get descriptor checksums from bitcoind
     let wallet_client = rpc_client(&rpc_url, &rpc_user, &rpc_pass, Some(&p.name))?;
 
-    let recv_info: serde_json::Value = wallet_client
-        .call("getdescriptorinfo", &[json!(recv_desc)])
-        .map_err(|e| format!("getdescriptorinfo: {e}"))?;
-    let change_info: serde_json::Value = wallet_client
-        .call("getdescriptorinfo", &[json!(change_desc)])
-        .map_err(|e| format!("getdescriptorinfo: {e}"))?;
+    if wallet_is_new {
+        // Import descriptors only for freshly created wallets.
+        // Existing wallets already have their descriptors from the previous session.
+        let recv_info: serde_json::Value = wallet_client
+            .call("getdescriptorinfo", &[json!(recv_desc)])
+            .map_err(|e| format!("getdescriptorinfo: {e}"))?;
+        let change_info: serde_json::Value = wallet_client
+            .call("getdescriptorinfo", &[json!(change_desc)])
+            .map_err(|e| format!("getdescriptorinfo: {e}"))?;
 
-    let recv_desc_cs = recv_info["descriptor"]
-        .as_str()
-        .ok_or("missing recv descriptor checksum")?;
-    let change_desc_cs = change_info["descriptor"]
-        .as_str()
-        .ok_or("missing change descriptor checksum")?;
+        let recv_desc_cs = recv_info["descriptor"]
+            .as_str()
+            .ok_or("missing recv descriptor checksum")?;
+        let change_desc_cs = change_info["descriptor"]
+            .as_str()
+            .ok_or("missing change descriptor checksum")?;
 
-    // Import descriptors with private keys
-    wallet_client
-        .call::<serde_json::Value>(
-            "importdescriptors",
-            &[json!([
-                {
-                    "desc": recv_desc_cs,
-                    "active": true,
-                    "range": [0, 100],
-                    "timestamp": "now",
-                    "internal": false,
-                },
-                {
-                    "desc": change_desc_cs,
-                    "active": true,
-                    "range": [0, 100],
-                    "timestamp": "now",
-                    "internal": true,
-                }
-            ])],
-        )
-        .map_err(|e| format!("importdescriptors: {e}"))?;
+        wallet_client
+            .call::<serde_json::Value>(
+                "importdescriptors",
+                &[json!([
+                    {
+                        "desc": recv_desc_cs,
+                        "active": true,
+                        "range": [0, 100],
+                        "timestamp": "now",
+                        "internal": false,
+                    },
+                    {
+                        "desc": change_desc_cs,
+                        "active": true,
+                        "range": [0, 100],
+                        "timestamp": "now",
+                        "internal": true,
+                    }
+                ])],
+            )
+            .map_err(|e| format!("importdescriptors: {e}"))?;
+    }
 
-    // Get first receive address (P2TR / bech32m)
+    // Get receive address (P2TR / bech32m) — works for both new and existing wallets
     let addr: serde_json::Value = wallet_client
         .call("getnewaddress", &[json!(""), json!("bech32m")])
         .map_err(|e| format!("getnewaddress: {e}"))?;
@@ -257,7 +266,7 @@ fn handle_create_wallet(params: serde_json::Value) -> Result<serde_json::Value, 
 
     // Persist wallet state
     let state = WalletState {
-        mnemonic: mnemonic.to_string(),
+        mnemonic: if wallet_is_new { mnemonic.to_string() } else { String::new() },
         wallet_name: p.name.clone(),
         descriptor: recv_desc,
         change_descriptor: change_desc,
