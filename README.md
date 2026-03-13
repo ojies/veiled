@@ -172,7 +172,7 @@ derived from the pseudonym.
 
 | Document | Description |
 |----------|-------------|
-| [SCENARIO.md](docs/SCENARIO.md) | End-to-end walkthrough (Alice, CoffeeCo, BookStore) |
+| [SCENARIO.md](docs/SCENARIO.md) | End-to-end walkthrough (Alice, CoffeeCo, BookStore, TechMart) |
 | [API.md](docs/API.md) | gRPC API reference (Registry + Merchant services) |
 | [CRYPTOGRAPHY.md](docs/CRYPTOGRAPHY.md) | Cryptographic primitives and terminology |
 | [LAYOUT.md](docs/LAYOUT.md) | Project directory structure |

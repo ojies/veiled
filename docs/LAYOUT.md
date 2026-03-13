@@ -2,7 +2,7 @@
 
 ```
 veiled/
-├── Cargo.toml                           # single package with lib + 3 binaries
+├── Cargo.toml                           # single package with lib + 4 binaries
 ├── build.rs                             # protobuf compilation (tonic-build)
 ├── proto/
 │   ├── registry.proto                   # Registry gRPC service definition
@@ -34,12 +34,17 @@ veiled/
 │       └── merchant/
 │           ├── main.rs                 # Merchant server entry point
 │           └── service.rs              # MerchantGrpcService handlers
+├── demo/
+│   └── simulate.rs                      # Full protocol simulation (3 merchants, 8 beneficiaries)
 ├── docs/
 │   ├── SCENARIO.md                     # End-to-end walkthrough
 │   ├── API.md                          # gRPC API reference
 │   ├── CRYPTOGRAPHY.md                 # Cryptographic primitives + terminology
 │   ├── LAYOUT.md                       # This file
-│   └── annomymous-credential.pdf       # ASC paper
+│   ├── annomymous-credential.pdf       # ASC paper
+│   └── images/
+│       ├── banner.svg                  # Project banner
+│       └── logo.svg                    # Project logo
 └── tests/
     └── registry_grpc_test.rs           # gRPC integration tests
 ```
