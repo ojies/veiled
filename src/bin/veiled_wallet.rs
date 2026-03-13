@@ -183,21 +183,28 @@ fn handle_create_wallet(params: serde_json::Value) -> Result<serde_json::Value, 
     let recv_desc = format!("tr([{}/86'/1'/0']{}/0/*)", fingerprint, account);
     let change_desc = format!("tr([{}/86'/1'/0']{}/1/*)", fingerprint, account);
 
-    // Create blank descriptor wallet in bitcoind
+    // Create blank descriptor wallet in bitcoind (or load if it already exists)
     let base_client = rpc_client(&rpc_url, &rpc_user, &rpc_pass, None)?;
-    base_client
-        .call::<serde_json::Value>(
-            "createwallet",
-            &[
-                json!(p.name),
-                json!(false), // disable_private_keys
-                json!(true),  // blank
-                json!(""),    // passphrase
-                json!(false), // avoid_reuse
-                json!(true),  // descriptors
-            ],
-        )
-        .map_err(|e| format!("createwallet: {e}"))?;
+    let create_result = base_client.call::<serde_json::Value>(
+        "createwallet",
+        &[
+            json!(p.name),
+            json!(false), // disable_private_keys
+            json!(true),  // blank
+            json!(""),    // passphrase
+            json!(false), // avoid_reuse
+            json!(true),  // descriptors
+        ],
+    );
+    if let Err(e) = &create_result {
+        let msg = e.to_string();
+        if msg.contains("already exists") || msg.contains("Database already") {
+            // Wallet exists in bitcoind — try loading it
+            let _ = base_client.call::<serde_json::Value>("loadwallet", &[json!(p.name)]);
+        } else {
+            return Err(format!("createwallet: {e}"));
+        }
+    }
 
     // Get descriptor checksums from bitcoind
     let wallet_client = rpc_client(&rpc_url, &rpc_user, &rpc_pass, Some(&p.name))?;
