@@ -1,6 +1,6 @@
 // Server-side in-memory simulation state (singleton across API routes)
 
-import type { SimState, BeneficiaryState, MerchantInfo, AnonymitySet, Credential } from "./types";
+import type { SimState, BeneficiaryState, MerchantInfo, AnonymitySet, Credential, WalletInfo, MerchantProcess } from "./types";
 
 const state: SimState = {
   phase: -1,
@@ -9,6 +9,8 @@ const state: SimState = {
   anonymity_set: null,
   beneficiaries: {},
   set_id: 1,
+  wallets: {},
+  merchant_processes: {},
 };
 
 export function getState(): SimState {
@@ -22,6 +24,10 @@ export function resetState(): void {
   state.anonymity_set = null;
   state.beneficiaries = {};
   state.set_id = 1;
+  state.wallets = {};
+  state.merchant_processes = {};
+  state.funding = undefined;
+  state.registry_address = undefined;
 }
 
 export function setPhase(phase: number): void {
@@ -63,4 +69,28 @@ export function updateBeneficiary(
   if (ben) {
     Object.assign(ben, update);
   }
+}
+
+export function setWallet(name: string, wallet: WalletInfo): void {
+  state.wallets[name] = wallet;
+}
+
+export function getWallet(name: string): WalletInfo | undefined {
+  return state.wallets[name];
+}
+
+export function setFunding(txid: string, vout: number, amount: number): void {
+  state.funding = { txid, vout, amount };
+}
+
+export function setRegistryAddress(address: string): void {
+  state.registry_address = address;
+}
+
+export function addMerchantProcess(name: string, proc: MerchantProcess): void {
+  state.merchant_processes[name] = proc;
+}
+
+export function getMerchantProcess(name: string): MerchantProcess | undefined {
+  return state.merchant_processes[name];
 }

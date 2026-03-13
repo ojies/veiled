@@ -1,36 +1,98 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Veiled Web UI
 
-## Getting Started
+Interactive demo of the Veiled pseudonymous payment protocol on Bitcoin. Each participant (registry, merchants, beneficiaries) has a real Bitcoin wallet on regtest with live transactions.
 
-First, run the development server:
+## Prerequisites
+
+- **Rust** (cargo)
+- **Node.js** 18+ and npm
+- **Bitcoin Core** (`bitcoind` and `bitcoin-cli` in PATH)
+
+## Quick Start
+
+From the project root:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+./scripts/dev.sh
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+This starts:
+1. `bitcoind` in regtest mode (port 18443)
+2. Registry gRPC server (port 50051)
+3. Next.js UI (port 3000)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Merchants are created dynamically through the UI — no pre-started merchants.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Architecture
 
-## Learn More
+```
+┌─────────────────────────────────────────┐
+│           Next.js Web UI (:3000)        │
+│  Landing │ Beneficiary │ Merchant       │
+├─────────────────────────────────────────┤
+│              API Routes                 │
+│  /api/setup/init   /api/wallet/*        │
+│  /api/beneficiary/* /api/merchant/*     │
+├──────────┬──────────┬───────────────────┤
+│  gRPC    │  veiled- │  veiled-          │
+│  Client  │  helper  │  wallet           │
+├──────────┼──────────┼───────────────────┤
+│ Registry │ Crypto   │ Bitcoin           │
+│ :50051   │ (stdin/  │ Wallet            │
+│          │  stdout) │ (stdin/stdout)    │
+├──────────┴──────────┼───────────────────┤
+│                     │ bitcoind (regtest)│
+│                     │ :18443            │
+└─────────────────────┴───────────────────┘
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Wallet Flow
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Every participant gets a BIP86 P2TR wallet backed by bitcoind:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Registry** — wallet created by `dev.sh` on startup, collects registration fees
+- **Merchants** — wallet created when registering through the UI, pays 5,000 sats registration fee
+- **Beneficiaries** — wallet auto-created with credential, pays 10,000 sats registration fee
 
-## Deploy on Vercel
+The **faucet** button mines regtest blocks to fund wallets instantly.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## API Routes
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/setup/init` | POST | Lazy set creation from registered merchants |
+| `/api/merchant/create` | POST | Spawn merchant gRPC server |
+| `/api/wallet/create` | POST | Create wallet for any participant |
+| `/api/wallet/balance` | GET | Query wallet balance |
+| `/api/wallet/send` | POST | Send BTC between wallets |
+| `/api/wallet/faucet` | POST | Mine blocks to fund wallets |
+| `/api/wallet/tx` | GET | Transaction details |
+| `/api/beneficiary/credential` | POST | Create ZK credential |
+| `/api/beneficiary/register` | POST | Register with anonymity set |
+| `/api/beneficiary/finalize` | POST | Finalize set with real UTXO |
+| `/api/beneficiary/payment-id` | POST | Register payment identity (ZK proof) |
+| `/api/beneficiary/payment` | POST | Request payment (Schnorr proof) |
+| `/api/beneficiary/incoming` | GET | Check incoming payments |
+| `/api/beneficiary/merchants` | GET | List registered merchants |
+| `/api/merchant/identities` | GET | Registered beneficiaries |
+| `/api/merchant/payments` | GET | Payment history |
+| `/api/state` | GET | Current simulation state |
+| `/api/reset` | POST | Reset all state |
+
+## Development
+
+```bash
+cd ui
+npm install
+npm run dev
+```
+
+The UI expects:
+- Registry at `[::1]:50051`
+- `bitcoind` at `localhost:18443` (user: `veiled`, pass: `veiled`)
+- Rust binaries built in `../target/release/`
+
+Environment variables:
+- `BITCOIN_RPC_URL` (default: `http://localhost:18443`)
+- `BITCOIN_RPC_USER` (default: `veiled`)
+- `BITCOIN_RPC_PASS` (default: `veiled`)

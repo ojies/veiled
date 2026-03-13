@@ -4,7 +4,8 @@ import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import path from "path";
 
-const PROTO_DIR = path.resolve(process.cwd(), "..", "proto");
+const PROTO_DIR =
+  process.env.PROTO_DIR || path.resolve(process.cwd(), "..", "proto");
 
 function loadProto(filename: string) {
   const pkgDef = protoLoader.loadSync(path.join(PROTO_DIR, filename), {
@@ -21,7 +22,9 @@ function loadProto(filename: string) {
 let registryClient: any = null;
 const merchantClients: Map<string, any> = new Map();
 
-export function getRegistryClient(address = "[::1]:50051") {
+export function getRegistryClient(
+  address = process.env.REGISTRY_ADDRESS || "[::1]:50051"
+) {
   if (!registryClient) {
     const proto = loadProto("registry.proto") as any;
     registryClient = new proto.registry.Registry(

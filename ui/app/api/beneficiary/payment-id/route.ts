@@ -5,12 +5,12 @@ import { getMerchantClient, grpcCall } from "@/lib/grpc";
 import { createPaymentId } from "@/lib/helper";
 import { getState, getBeneficiary, updateBeneficiary, setPhase } from "@/lib/state";
 
-// Merchant gRPC addresses (must match what scripts/dev.sh starts)
-const MERCHANT_PORTS: Record<string, string> = {
-  CoffeeCo: "[::1]:50061",
-  BookStore: "[::1]:50062",
-  TechMart: "[::1]:50063",
-};
+function getMerchantAddr(name: string): string | null {
+  const state = getState();
+  const proc = state.merchant_processes[name];
+  if (proc) return `localhost:${proc.port}`;
+  return null;
+}
 
 export async function POST(request: Request) {
   try {
@@ -51,10 +51,10 @@ export async function POST(request: Request) {
     });
 
     // Submit to merchant gRPC server
-    const merchantAddr = MERCHANT_PORTS[merchant];
+    const merchantAddr = getMerchantAddr(merchant);
     if (!merchantAddr) {
       return NextResponse.json(
-        { error: `no address for merchant '${merchant}'` },
+        { error: `no running merchant server for '${merchant}'` },
         { status: 400 }
       );
     }

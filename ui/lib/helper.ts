@@ -3,13 +3,9 @@
 import { execFileSync } from "child_process";
 import path from "path";
 
-const HELPER_BIN = path.resolve(
-  process.cwd(),
-  "..",
-  "target",
-  "release",
-  "veiled-helper"
-);
+const HELPER_BIN =
+  process.env.HELPER_BIN ||
+  path.resolve(process.cwd(), "..", "target", "release", "veiled-helper");
 
 interface HelperResult {
   [key: string]: any;

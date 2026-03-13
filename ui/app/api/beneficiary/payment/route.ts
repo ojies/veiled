@@ -5,11 +5,12 @@ import { getMerchantClient, grpcCall } from "@/lib/grpc";
 import { createPaymentRequest } from "@/lib/helper";
 import { getState, getBeneficiary, updateBeneficiary, setPhase } from "@/lib/state";
 
-const MERCHANT_PORTS: Record<string, string> = {
-  CoffeeCo: "[::1]:50061",
-  BookStore: "[::1]:50062",
-  TechMart: "[::1]:50063",
-};
+function getMerchantAddr(name: string): string | null {
+  const state = getState();
+  const proc = state.merchant_processes[name];
+  if (proc) return `localhost:${proc.port}`;
+  return null;
+}
 
 export async function POST(request: Request) {
   try {
@@ -47,7 +48,13 @@ export async function POST(request: Request) {
     });
 
     // Submit to merchant
-    const merchantAddr = MERCHANT_PORTS[merchant];
+    const merchantAddr = getMerchantAddr(merchant);
+    if (!merchantAddr) {
+      return NextResponse.json(
+        { error: `no running merchant server for '${merchant}'` },
+        { status: 400 }
+      );
+    }
     const merchantClient = getMerchantClient(merchantAddr);
     const resp: any = await grpcCall(merchantClient, "SubmitPaymentRequest", {
       amount,

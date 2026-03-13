@@ -44,6 +44,21 @@ export interface AnonymitySet {
   capacity: number;
 }
 
+export interface WalletInfo {
+  address: string;
+  balance: number;
+  mnemonic?: string;
+  role: "registry" | "merchant" | "beneficiary";
+}
+
+export interface MerchantProcess {
+  name: string;
+  origin: string;
+  port: number;
+  pid: number;
+  status: "starting" | "running" | "stopped";
+}
+
 export interface SimState {
   phase: number;
   merchants: MerchantInfo[];
@@ -51,4 +66,8 @@ export interface SimState {
   anonymity_set: AnonymitySet | null;
   beneficiaries: Record<string, BeneficiaryState>;
   set_id: number;
+  wallets: Record<string, WalletInfo>;
+  merchant_processes: Record<string, MerchantProcess>;
+  funding?: { txid: string; vout: number; amount: number };
+  registry_address?: string;
 }
