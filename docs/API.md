@@ -162,15 +162,47 @@ to gRPC services, Rust helper binaries, and the Bitcoin wallet.
 
 ## Wallet CLI (`veiled-wallet`)
 
-Standalone binary for BIP86 P2TR wallet management. Uses BDK for descriptor
-wallets and bitcoincore-rpc for chain interaction. Communicates via JSON on
-stdin/stdout.
+Standalone binary for BIP86 P2TR wallet management. Built on
+[`bdk_wallet`](https://crates.io/crates/bdk_wallet) v2 for descriptor-based
+wallet operations and [`bdk_bitcoind_rpc`](https://crates.io/crates/bdk_bitcoind_rpc)
+for chain synchronization. Communicates via JSON on stdin/stdout.
+
+**Key design decisions:**
+
+- **No bitcoind wallet needed** — BDK manages keys, descriptors, and address
+  derivation entirely locally. The binary never calls `createwallet` or
+  `loadwallet` on bitcoind, eliminating "database already exists" errors.
+- **Ephemeral wallet recreation** — Each invocation recreates the BDK wallet
+  from the stored mnemonic and descriptors. No persistent BDK database; the
+  wallet is rebuilt from the JSON state file on every call.
+- **Emitter-based sync** — Uses `bdk_bitcoind_rpc::Emitter` to walk the chain
+  block-by-block and apply mempool updates, giving the wallet an accurate view
+  of confirmed and unconfirmed balances.
+- **Per-participant state** — Each participant (registry, merchant, beneficiary)
+  has its own JSON state file in the `.wallets/` directory.
+
+**State file format** (`<name>.json`):
+
+```json
+{
+  "mnemonic": "twelve word mnemonic phrase ...",
+  "descriptor": "tr([fingerprint/86'/1'/0']xprv.../0/*)",
+  "change_descriptor": "tr([fingerprint/86'/1'/0']xprv.../1/*)",
+  "address": "bcrt1p...",
+  "address_index": 0,
+  "network": "regtest"
+}
+```
+
+Balances and UTXOs are always fetched live from bitcoind — never cached in state.
 
 ### Commands
 
 #### `create-wallet`
 
-Create a new BDK wallet with BIP39 mnemonic and BIP86 P2TR descriptors.
+Generate a new BIP39 mnemonic, derive BIP86 P2TR descriptors, create a BDK
+wallet, and save the state file. If the state file already exists, the existing
+wallet is loaded and returned (idempotent).
 
 ```json
 // Input
@@ -184,7 +216,8 @@ Optional: `rpc_url`, `rpc_user`, `rpc_pass` (defaults: `http://localhost:18443`,
 
 #### `get-balance`
 
-Sync wallet with bitcoind and return current balance.
+Recreate the BDK wallet from state, sync with bitcoind via Emitter, and return
+the current balance.
 
 ```json
 // Input
@@ -208,7 +241,8 @@ Get a new receive address from the wallet.
 
 #### `send`
 
-Build, sign, and broadcast a transaction.
+Recreate the BDK wallet from state, sync UTXOs, build a PSBT, sign with BDK,
+extract the final transaction, and broadcast via bitcoind RPC.
 
 ```json
 // Input
@@ -244,7 +278,9 @@ Look up transaction details from bitcoind.
 
 #### `get-tx-history`
 
-List all transactions for a wallet (incoming and outgoing).
+Recreate the BDK wallet from state, sync, and list all transactions using
+`wallet.transactions()` and `wallet.sent_and_received()`. Classifies each
+transaction as incoming or outgoing based on net sats flow.
 
 ```json
 // Input

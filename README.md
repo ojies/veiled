@@ -207,6 +207,7 @@ Test coverage:
 - [x] Beneficiary CLI with full Phase 1-5 flow
 - [x] Interactive web UI (Next.js) with role-based Beneficiary/Merchant flows
 - [x] `veiled-helper` CLI bridge for Rust crypto operations from the web UI
+- [x] `veiled-wallet` BDK-based wallet binary (BIP86 P2TR, local key management, no bitcoind wallets)
 - [x] Full protocol simulation (`demo`) with 3 merchants and 8 beneficiaries
 
 ### Phase 3-4 improvements (Payment Identity Registration)

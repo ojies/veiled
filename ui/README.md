@@ -48,7 +48,10 @@ Merchants are created dynamically through the UI — no pre-started merchants.
 
 ## Wallet Flow
 
-Every participant gets a BIP86 P2TR wallet backed by bitcoind:
+Every participant gets a BIP86 P2TR wallet managed locally by BDK (`bdk_wallet` v2).
+Keys and descriptors are stored in per-participant JSON state files — no bitcoind
+wallet creation is needed. Chain data (UTXOs, balances) is synced from bitcoind
+via `bdk_bitcoind_rpc`'s `Emitter` pattern (block-by-block + mempool):
 
 - **Registry** — wallet created by `dev.sh` on startup, collects registration fees
 - **Merchants** — wallet created when registering through the UI, pays 5,000 sats registration fee, sends payments to beneficiaries

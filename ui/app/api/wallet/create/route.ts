@@ -1,8 +1,9 @@
-// POST /api/wallet/create — Create a BDK wallet for any participant
-// If the wallet already exists (e.g. from a previous session), loads it instead.
+// POST /api/wallet/create — Create a BDK wallet for any participant.
+// BDK manages wallets locally — no bitcoind wallet needed.
+// The Rust binary is idempotent: if the state file exists, it returns the existing wallet.
 
 import { NextResponse } from "next/server";
-import { createWallet, walletExists, getAddress } from "@/lib/wallet";
+import { createWallet, walletExists } from "@/lib/wallet";
 import { setWallet, getWallet } from "@/lib/state";
 
 export async function POST(request: Request) {
@@ -12,7 +13,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "name required" }, { status: 400 });
     }
 
-    // If wallet state file already exists, return the existing wallet
+    // If wallet is already in memory, return it
     if (walletExists(name)) {
       const existing = getWallet(name);
       if (existing) {
@@ -23,44 +24,10 @@ export async function POST(request: Request) {
           existing: true,
         });
       }
-      // State file exists but not in memory — reload address
-      try {
-        const addr = getAddress(name);
-        const info = {
-          address: addr.address,
-          balance: 0,
-          mnemonic: "",
-          role: role || "beneficiary",
-        };
-        setWallet(name, info);
-        return NextResponse.json({ ...addr, wallet_name: name, existing: true });
-      } catch {
-        // Fall through to create
-      }
     }
 
-    let result;
-    try {
-      result = createWallet(name);
-    } catch (err: any) {
-      // If bitcoind says the wallet already exists, try loading it
-      if (err.message?.includes("already exists") || err.message?.includes("Database already")) {
-        try {
-          const addr = getAddress(name);
-          const info = {
-            address: addr.address,
-            balance: 0,
-            mnemonic: "",
-            role: role || "beneficiary",
-          };
-          setWallet(name, info);
-          return NextResponse.json({ ...addr, wallet_name: name, existing: true });
-        } catch (loadErr: any) {
-          return NextResponse.json({ error: loadErr.message }, { status: 500 });
-        }
-      }
-      throw err;
-    }
+    // Create wallet (or load existing from state file — handled by Rust binary)
+    const result = createWallet(name);
 
     setWallet(name, {
       address: result.address,

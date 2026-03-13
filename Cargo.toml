@@ -42,6 +42,10 @@ hkdf = "0.12"
 bip39 = "2"
 bitcoincore-rpc = "0.19"
 
+# BDK wallet (replaces raw bitcoind wallet management)
+bdk_wallet = "2"
+bdk_bitcoind_rpc = "0.21"
+
 # Registry
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
@@ -62,3 +66,4 @@ tonic-build = "0.12"
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }
 http-body-util = "0.1"
+tempfile = "3"
