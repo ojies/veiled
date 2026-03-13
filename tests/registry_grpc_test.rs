@@ -5,15 +5,15 @@ use veiled::registry::pb::registry_client::RegistryClient;
 use veiled::registry::pb::registry_server::RegistryServer;
 use veiled::registry::pb::{
     BeneficiaryRequest, CreateSetRequest, FinalizeSetRequest, GetAnonymitySetRequest,
-    GetCrsRequest, GetMerchantsRequest, MerchantRequest,
+    GetCrsRequest, GetMerchantsRequest, GetRegistryAddressRequest, MerchantRequest,
 };
 use veiled::registry::service::RegistryService;
-use veiled::registry::store::RegistryStore;
+use veiled::registry::store::{FeeConfig, RegistryStore};
 
 #[tokio::test]
 async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "[::1]:50052".parse()?;
-    let store = Arc::new(Mutex::new(RegistryStore::new()));
+    let store = Arc::new(Mutex::new(RegistryStore::new(None, FeeConfig::default())));
     let service = RegistryService::new(store);
 
     let server_handle = tokio::spawn(async move {
@@ -62,6 +62,7 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
         set_id: 1,
         merchant_names: vec!["Test Merchant".to_string()],
         beneficiary_capacity: 2,
+        sats_per_user: 2_000,
     };
     client.create_set(create_set_req).await?;
 
@@ -70,6 +71,7 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
         set_id: 1,
         merchant_names: vec!["Test Merchant".to_string()],
         beneficiary_capacity: 2,
+        sats_per_user: 2_000,
     };
     assert!(client.create_set(dup_set_req).await.is_err());
 
@@ -78,8 +80,23 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
         set_id: 99,
         merchant_names: vec!["Unknown Merchant".to_string()],
         beneficiary_capacity: 2,
+        sats_per_user: 2_000,
     };
     assert!(client.create_set(bad_set_req).await.is_err());
+
+    // 2.3 GetRegistryAddress — returns P2TR address for the set
+    let addr_res = client
+        .get_registry_address(GetRegistryAddressRequest { set_id: 1 })
+        .await?
+        .into_inner();
+    assert!(addr_res.address.starts_with("bcrt1p"), "expected bcrt1p address, got: {}", addr_res.address);
+    assert_eq!(addr_res.internal_key.len(), 32);
+
+    // 2.4 GetRegistryAddress for unknown set should fail
+    assert!(client
+        .get_registry_address(GetRegistryAddressRequest { set_id: 99 })
+        .await
+        .is_err());
 
     // 3. Get CRS (Phase 1: beneficiaries need this)
     let crs_res = client
@@ -95,6 +112,7 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
         .is_err());
 
     // 4. Register Beneficiaries (Phase 2)
+    // No RPC client in test, so payment verification is skipped
     let secp = bitcoin::secp256k1::Secp256k1::new();
     let sk1 = bitcoin::secp256k1::SecretKey::from_slice(&[0x01; 32])?;
     let pk1 = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk1);
@@ -107,6 +125,8 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
             name: "Alice".to_string(),
             email: "alice@example.com".to_string(),
             phone: "+123456789".to_string(),
+            funding_txid: vec![0xaa; 32],
+            funding_vout: 0,
         })
         .await?
         .into_inner();
@@ -120,6 +140,8 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
             name: "AliceDup".to_string(),
             email: "".to_string(),
             phone: "".to_string(),
+            funding_txid: vec![0xaa; 32],
+            funding_vout: 0,
         })
         .await
         .is_err());
@@ -136,6 +158,8 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
             name: "Bob".to_string(),
             email: "bob@example.com".to_string(),
             phone: "+987654321".to_string(),
+            funding_txid: vec![0xbb; 32],
+            funding_vout: 0,
         })
         .await?;
 
@@ -153,7 +177,7 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
     let finalize_res = client
         .finalize_set(FinalizeSetRequest {
             set_id: 1,
-            sats_per_user: 10_000,
+            sats_per_user: 2_000,
             funding_txid: vec![0xaa; 32],
             funding_vout: 0,
         })
@@ -172,7 +196,7 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
     assert!(client
         .finalize_set(FinalizeSetRequest {
             set_id: 99,
-            sats_per_user: 10_000,
+            sats_per_user: 2_000,
             funding_txid: vec![0xaa; 32],
             funding_vout: 0,
         })
@@ -196,6 +220,7 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
             set_id: 2,
             merchant_names: vec!["Test Merchant".to_string()],
             beneficiary_capacity: 2,
+            sats_per_user: 2_000,
         })
         .await?;
 
@@ -223,6 +248,8 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
             name: "Carol".to_string(),
             email: "".to_string(),
             phone: "".to_string(),
+            funding_txid: vec![0xcc; 32],
+            funding_vout: 0,
         })
         .await?;
 
@@ -235,13 +262,15 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
             name: "Dave".to_string(),
             email: "".to_string(),
             phone: "".to_string(),
+            funding_txid: vec![0xdd; 32],
+            funding_vout: 0,
         })
         .await?;
 
     client
         .finalize_set(FinalizeSetRequest {
             set_id: 2,
-            sats_per_user: 5_000,
+            sats_per_user: 2_000,
             funding_txid: vec![0xbb; 32],
             funding_vout: 0,
         })

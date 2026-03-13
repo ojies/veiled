@@ -57,7 +57,7 @@ prost = "0.13"
 tokio-stream = "0.1"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 rand = "0.8"
 
 [build-dependencies]

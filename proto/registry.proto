@@ -14,6 +14,7 @@ service Registry {
   rpc GetCrs (GetCrsRequest) returns (GetCrsResponse);
   rpc GetAnonymitySet (GetAnonymitySetRequest) returns (GetAnonymitySetResponse);
   rpc GetVtxoTree (GetVtxoTreeRequest) returns (GetVtxoTreeResponse);
+  rpc GetRegistryAddress (GetRegistryAddressRequest) returns (GetRegistryAddressResponse);
 
   // Subscriptions
   rpc SubscribeSetFinalization (GetAnonymitySetRequest) returns (stream GetAnonymitySetResponse);
@@ -36,6 +37,7 @@ message CreateSetRequest {
   uint64 set_id = 1;
   repeated string merchant_names = 2;
   uint32 beneficiary_capacity = 3;
+  uint64 sats_per_user = 4;
 }
 
 message CreateSetResponse {
@@ -48,6 +50,8 @@ message BeneficiaryRequest {
   string name = 3;
   string email = 4;
   string phone = 5;
+  bytes funding_txid = 6;  // 32-byte txid of payment tx
+  uint32 funding_vout = 7; // output index within payment tx
 }
 
 message BeneficiaryResponse {
@@ -106,4 +110,13 @@ message GetVtxoTreeRequest {
 message GetVtxoTreeResponse {
   bytes root_tx = 1;   // Bitcoin consensus-encoded transaction
   bytes fanout_tx = 2; // Bitcoin consensus-encoded transaction
+}
+
+message GetRegistryAddressRequest {
+  uint64 set_id = 1;
+}
+
+message GetRegistryAddressResponse {
+  string address = 1;       // P2TR bech32m address (bcrt1p... on regtest)
+  bytes internal_key = 2;   // 32-byte x-only public key
 }

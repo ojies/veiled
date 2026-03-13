@@ -90,6 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             name: args.name.clone(),
             email: String::new(),
             phone: String::new(),
+            funding_txid: vec![0x00; 32],
+            funding_vout: 0,
         })
         .await?
         .into_inner();
@@ -127,7 +129,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // 5. Register with the anonymity set locally (Phase 2 complete)
-    beneficiary.register(args.set_id, anonymity_set.clone())?;
+    // Convert u64 set_id to [u8; 32] for core API (placeholder until finalization provides Merkle root)
+    let mut set_id_bytes = [0u8; 32];
+    set_id_bytes[..8].copy_from_slice(&args.set_id.to_le_bytes());
+    beneficiary.register(set_id_bytes, anonymity_set.clone())?;
     info!(
         "Registered locally at index {}",
         beneficiary.index.unwrap()
@@ -180,7 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .submit_payment_registration(PaymentRegistrationRequest {
                 pseudonym: payment_reg.pseudonym.to_vec(),
                 public_nullifier: payment_reg.public_nullifier.to_vec(),
-                set_id: payment_reg.set_id,
+                set_id: u64::from_le_bytes(payment_reg.set_id[..8].try_into().unwrap()),
                 service_index: payment_reg.service_index as u32,
                 friendly_name: payment_reg.friendly_name.clone(),
                 proof: proof_bytes,

@@ -55,6 +55,8 @@ services:
       - BITCOIN_RPC_URL=http://bitcoind:18443
       - BITCOIN_RPC_USER=veiled
       - BITCOIN_RPC_PASS=veiled
+      - BENEFICIARY_REGISTRATION_FEE=2000
+      - MERCHANT_REGISTRATION_FEE=3000
       - WALLETS_DIR=/app/data/wallets
       - LISTEN=0.0.0.0:50051
     volumes:
@@ -110,8 +112,9 @@ services:
       # Protocol configuration
       - BENEFICIARY_CAPACITY=2
       - MIN_MERCHANTS=1
-      - MERCHANT_REGISTRATION_FEE=5000
-      - DEFAULT_SATS_PER_USER=10000
+      - MERCHANT_REGISTRATION_FEE=3000
+      - DEFAULT_SATS_PER_USER=2000
+      - BENEFICIARY_REGISTRATION_FEE=2000
       - MERCHANT_START_PORT=50061
     volumes:
       - wallets:/app/data/wallets

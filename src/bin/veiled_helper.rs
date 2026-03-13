@@ -193,7 +193,11 @@ fn handle_create_payment_id(params: serde_json::Value) -> Result<serde_json::Val
     // Reconstruct beneficiary with the required state
     let mut ben = Beneficiary {
         credential,
-        set_id: Some(p.set_id),
+        set_id: Some({
+            let mut bytes = [0u8; 32];
+            bytes[..8].copy_from_slice(&p.set_id.to_le_bytes());
+            bytes
+        }),
         index: Some(p.index),
         anonymity_set: Some(commitments),
         registrations: std::collections::HashMap::new(),
@@ -210,7 +214,7 @@ fn handle_create_payment_id(params: serde_json::Value) -> Result<serde_json::Val
         proof_hex: hex::encode(proof_bytes),
         friendly_name: reg.friendly_name,
         service_index: reg.service_index,
-        set_id: reg.set_id,
+        set_id: u64::from_le_bytes(reg.set_id[..8].try_into().unwrap()),
     };
     serde_json::to_value(resp).map_err(|e| e.to_string())
 }

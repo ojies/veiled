@@ -4,7 +4,8 @@ use crate::registry::pb::{
     BeneficiaryRequest, BeneficiaryResponse, CreateSetRequest, CreateSetResponse,
     FinalizeSetRequest, FinalizeSetResponse, GetAnonymitySetRequest, GetAnonymitySetResponse,
     GetCrsRequest, GetCrsResponse, GetMerchantsRequest, GetMerchantsResponse,
-    GetVtxoTreeRequest, GetVtxoTreeResponse, MerchantEntry, MerchantRequest, MerchantResponse,
+    GetRegistryAddressRequest, GetRegistryAddressResponse, GetVtxoTreeRequest,
+    GetVtxoTreeResponse, MerchantEntry, MerchantRequest, MerchantResponse,
 };
 use crate::registry::store::RegistryStore;
 use bitcoin::consensus::Encodable;
@@ -55,6 +56,7 @@ impl Registry for RegistryService {
                 req.set_id,
                 &req.merchant_names,
                 req.beneficiary_capacity as usize,
+                req.sats_per_user,
             )
             .map_err(Status::invalid_argument)?;
         Ok(Response::new(CreateSetResponse {
@@ -73,9 +75,22 @@ impl Registry for RegistryService {
             .map_err(|_| Status::invalid_argument("phi must be 33 bytes"))?;
         let phi = Commitment(phi_bytes);
 
+        let txid: Txid = {
+            let txid_bytes: [u8; 32] = req
+                .funding_txid
+                .try_into()
+                .map_err(|_| Status::invalid_argument("funding_txid must be 32 bytes"))?;
+            Txid::from_byte_array(txid_bytes)
+        };
+
+        let outpoint = OutPoint {
+            txid,
+            vout: req.funding_vout,
+        };
+
         let mut store = self.store.lock().await;
         let index = store
-            .register_beneficiary(req.set_id, phi)
+            .register_beneficiary(req.set_id, phi, outpoint)
             .map_err(Status::invalid_argument)?;
 
         Ok(Response::new(BeneficiaryResponse {
@@ -193,6 +208,21 @@ impl Registry for RegistryService {
         Ok(Response::new(GetVtxoTreeResponse {
             root_tx: root_tx_bytes,
             fanout_tx: fanout_tx_bytes,
+        }))
+    }
+
+    async fn get_registry_address(
+        &self,
+        request: Request<GetRegistryAddressRequest>,
+    ) -> Result<Response<GetRegistryAddressResponse>, Status> {
+        let req = request.into_inner();
+        let store = self.store.lock().await;
+        let (address, internal_key) = store
+            .get_registry_address(req.set_id)
+            .map_err(Status::not_found)?;
+        Ok(Response::new(GetRegistryAddressResponse {
+            address,
+            internal_key,
         }))
     }
 

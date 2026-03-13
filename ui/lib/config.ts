@@ -17,10 +17,13 @@ export const MIN_MERCHANTS = intEnv("MIN_MERCHANTS", 1);
 export const BENEFICIARY_CAPACITY = intEnv("BENEFICIARY_CAPACITY", 2);
 
 /** Merchant registration fee in sats */
-export const MERCHANT_REGISTRATION_FEE = intEnv("MERCHANT_REGISTRATION_FEE", 5000);
+export const MERCHANT_REGISTRATION_FEE = intEnv("MERCHANT_REGISTRATION_FEE", 3000);
 
 /** Default sats-per-user when registry balance is zero */
-export const DEFAULT_SATS_PER_USER = intEnv("DEFAULT_SATS_PER_USER", 10000);
+export const DEFAULT_SATS_PER_USER = intEnv("DEFAULT_SATS_PER_USER", 2000);
+
+/** Beneficiary registration fee in sats (paid to registry P2TR address) */
+export const BENEFICIARY_REGISTRATION_FEE = intEnv("BENEFICIARY_REGISTRATION_FEE", 2000);
 
 /** Starting port for dynamically spawned merchant gRPC servers */
 export const MERCHANT_START_PORT = intEnv("MERCHANT_START_PORT", 50061);

@@ -56,7 +56,11 @@ impl MerchantService for MerchantGrpcService {
         let registration = PaymentIdentityRegistration {
             pseudonym,
             public_nullifier,
-            set_id: req.set_id,
+            set_id: {
+                let mut bytes = [0u8; 32];
+                bytes[..8].copy_from_slice(&req.set_id.to_le_bytes());
+                bytes
+            },
             service_index: req.service_index as usize,
             friendly_name: req.friendly_name.clone(),
             proof,

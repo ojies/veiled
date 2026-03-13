@@ -218,17 +218,7 @@ export default function BeneficiaryPage() {
   async function registerWithRegistry() {
     setLoading("register");
     try {
-      // Pay registration fee to registry (10,000 sats)
-      if (registryAddress && walletBalance >= 10000) {
-        const walletName = `beneficiary-${name.toLowerCase().replace(/\s+/g, "-")}`;
-        await api("/api/wallet/send", {
-          from: walletName,
-          to_address: registryAddress,
-          amount_sats: 10000,
-        });
-        toast("Registration fee sent to registry (10,000 sats)", "info");
-      }
-
+      // Payment is handled internally by the register API route
       const data = await api("/api/beneficiary/register", { name: name.trim() });
       setRegIndex(data.index);
       setSetStatus({ count: data.set_count, capacity: data.set_capacity });

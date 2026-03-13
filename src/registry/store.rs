@@ -2,8 +2,11 @@ use crate::core::registry::Registry;
 use crate::core::tx::{build_identity_tree, IdentityTXO, IdentityTree};
 use crate::core::types::Commitment;
 use crate::core::Merchant;
-use bitcoin::{Amount, OutPoint};
+use bdk_bitcoind_rpc::bitcoincore_rpc::{Client, RpcApi};
+use bitcoin::secp256k1::Secp256k1;
+use bitcoin::{Address, Amount, Network, OutPoint};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::watch;
 
 pub struct MerchantInfo {
@@ -15,27 +18,50 @@ pub struct MerchantInfo {
 pub struct ActiveSet {
     pub registry: Registry,
     pub beneficiary_capacity: usize,
+    pub sats_per_user: u64,
     pub finalized: bool,
     pub tree: Option<IdentityTree>,
     pub finalization_tx: watch::Sender<bool>,
 }
 
+/// Configuration for minimum fees enforced by the registry.
+#[derive(Debug, Clone)]
+pub struct FeeConfig {
+    /// Minimum sats-per-user required when creating a set.
+    pub min_sats_per_user: u64,
+    /// Minimum merchant registration fee in sats (future use).
+    pub merchant_registration_fee: u64,
+}
+
+impl Default for FeeConfig {
+    fn default() -> Self {
+        Self {
+            min_sats_per_user: 2_000,
+            merchant_registration_fee: 3_000,
+        }
+    }
+}
+
 pub struct RegistryStore {
     pub merchant_pool: HashMap<String, MerchantInfo>,
     pub active_sets: HashMap<u64, ActiveSet>,
+    pub rpc_client: Option<Arc<Client>>,
+    pub fee_config: FeeConfig,
 }
 
 impl Default for RegistryStore {
     fn default() -> Self {
-        Self::new()
+        Self::new(None, FeeConfig::default())
     }
 }
 
 impl RegistryStore {
-    pub fn new() -> Self {
+    pub fn new(rpc_client: Option<Arc<Client>>, fee_config: FeeConfig) -> Self {
         Self {
             merchant_pool: HashMap::new(),
             active_sets: HashMap::new(),
+            rpc_client,
+            fee_config,
         }
     }
 
@@ -66,6 +92,7 @@ impl RegistryStore {
         set_id: u64,
         merchant_names: &[String],
         beneficiary_capacity: usize,
+        sats_per_user: u64,
     ) -> Result<(), String> {
         if self.active_sets.contains_key(&set_id) {
             return Err(format!("Set {} already exists", set_id));
@@ -73,6 +100,13 @@ impl RegistryStore {
 
         if merchant_names.is_empty() {
             return Err("At least one merchant is required".to_string());
+        }
+
+        if sats_per_user < self.fee_config.min_sats_per_user {
+            return Err(format!(
+                "sats_per_user ({}) below minimum ({})",
+                sats_per_user, self.fee_config.min_sats_per_user
+            ));
         }
 
         // Collect merchants from pool
@@ -86,7 +120,7 @@ impl RegistryStore {
         }
 
         // Create core::Registry and setup CRS
-        let mut registry = Registry::new(beneficiary_capacity);
+        let mut registry = Registry::new(beneficiary_capacity, sats_per_user);
         for m in merchants {
             registry.add_merchant(m);
         }
@@ -98,6 +132,7 @@ impl RegistryStore {
             ActiveSet {
                 registry,
                 beneficiary_capacity,
+                sats_per_user,
                 finalized: false,
                 tree: None,
                 finalization_tx,
@@ -111,6 +146,7 @@ impl RegistryStore {
         &mut self,
         set_id: u64,
         phi: Commitment,
+        outpoint: OutPoint,
     ) -> Result<usize, String> {
         let active_set = self
             .active_sets
@@ -134,7 +170,58 @@ impl RegistryStore {
             return Err("Beneficiary already registered in this set".to_string());
         }
 
-        let index = active_set.registry.add_beneficiary(phi);
+        // Verify payment on-chain if RPC client is available
+        if let Some(rpc) = &self.rpc_client {
+            let registry_pk = active_set.registry.public_key();
+            let (xonly, _) = registry_pk.x_only_public_key();
+            let secp = Secp256k1::new();
+            let registry_address = Address::p2tr(&secp, xonly, None, Network::Regtest);
+
+            // Fetch the transaction from bitcoind
+            let raw_tx: serde_json::Value = rpc
+                .call(
+                    "getrawtransaction",
+                    &[
+                        serde_json::json!(outpoint.txid.to_string()),
+                        serde_json::json!(true),
+                    ],
+                )
+                .map_err(|e| format!("Failed to fetch transaction {}: {}", outpoint.txid, e))?;
+
+            // Verify the output at the specified vout
+            let vout_array = raw_tx["vout"]
+                .as_array()
+                .ok_or("Transaction has no vout array")?;
+            let output = vout_array
+                .get(outpoint.vout as usize)
+                .ok_or(format!("vout index {} not found in tx", outpoint.vout))?;
+
+            // Check the address matches the registry's P2TR address
+            let script_address = output["scriptPubKey"]["address"]
+                .as_str()
+                .ok_or("Output has no address")?;
+            let expected_address = registry_address.to_string();
+            if script_address != expected_address {
+                return Err(format!(
+                    "Payment output address mismatch: expected {}, got {}",
+                    expected_address, script_address
+                ));
+            }
+
+            // Check the amount (value is in BTC as f64, convert to sats)
+            let value_btc = output["value"]
+                .as_f64()
+                .ok_or("Output has no value")?;
+            let value_sats = (value_btc * 100_000_000.0).round() as u64;
+            if value_sats < active_set.sats_per_user {
+                return Err(format!(
+                    "Payment amount too low: expected {} sats, got {} sats",
+                    active_set.sats_per_user, value_sats
+                ));
+            }
+        }
+
+        let index = active_set.registry.add_beneficiary(phi, outpoint);
 
         Ok(index)
     }
@@ -210,5 +297,19 @@ impl RegistryStore {
             .tree
             .as_ref()
             .ok_or_else(|| format!("Set {} not yet finalized", set_id))
+    }
+
+    pub fn get_registry_address(&self, set_id: u64) -> Result<(String, Vec<u8>), String> {
+        let active_set = self
+            .active_sets
+            .get(&set_id)
+            .ok_or_else(|| format!("Set {} not found", set_id))?;
+
+        let pk = active_set.registry.public_key();
+        let (xonly, _) = pk.x_only_public_key();
+        let secp = Secp256k1::new();
+        let address = Address::p2tr(&secp, xonly, None, Network::Regtest);
+
+        Ok((address.to_string(), xonly.serialize().to_vec()))
     }
 }

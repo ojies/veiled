@@ -12,7 +12,7 @@ import {
   setRegistryAddress,
 } from "@/lib/state";
 import { createWallet, walletExists } from "@/lib/wallet";
-import { BENEFICIARY_CAPACITY, MIN_MERCHANTS } from "@/lib/config";
+import { BENEFICIARY_CAPACITY, MIN_MERCHANTS, DEFAULT_SATS_PER_USER } from "@/lib/config";
 
 export async function POST() {
   try {
@@ -63,6 +63,7 @@ export async function POST() {
       set_id: state.set_id,
       merchant_names: merchants.map((m: any) => m.name),
       beneficiary_capacity: BENEFICIARY_CAPACITY,
+      sats_per_user: DEFAULT_SATS_PER_USER,
     });
 
     // Fetch CRS

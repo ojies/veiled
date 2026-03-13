@@ -26,7 +26,7 @@ use veiled::registry::pb::{
     GetCrsRequest, GetVtxoTreeRequest, MerchantRequest,
 };
 use veiled::registry::service::RegistryService;
-use veiled::registry::store::RegistryStore;
+use veiled::registry::store::{FeeConfig, RegistryStore};
 
 use merchant_pb::merchant_service_client::MerchantServiceClient;
 use merchant_pb::{PaymentRegistrationRequest, PaymentRequestMsg};
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Start Registry ──────────────────────────────────────────
     separator("Starting Registry Server");
 
-    let store = Arc::new(Mutex::new(RegistryStore::new()));
+    let store = Arc::new(Mutex::new(RegistryStore::new(None, FeeConfig::default())));
     let registry_service = RegistryService::new(store);
     let registry_addr = REGISTRY_ADDR.parse()?;
 
@@ -125,6 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             set_id: 1,
             merchant_names: merchant_names.clone(),
             beneficiary_capacity: BENEFICIARY_NAMES.len() as u32,
+            sats_per_user: 2_000,
         })
         .await?;
     step(&format!(
@@ -193,6 +194,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name: name.to_string(),
                 email: format!("{}@example.com", name),
                 phone: "".into(),
+                funding_txid: vec![0xaa; 32],
+                funding_vout: 0,
             })
             .await?
             .into_inner();
@@ -214,7 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client
         .finalize_set(FinalizeSetRequest {
             set_id: 1,
-            sats_per_user: 10_000,
+            sats_per_user: 2_000,
             funding_txid: vec![0xaa; 32],
             funding_vout: 0,
         })
@@ -237,7 +240,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     for (i, name) in BENEFICIARY_NAMES.iter().enumerate() {
-        beneficiaries[i].register(1, anonymity_set.clone())?;
+        let mut set_id_bytes = [0u8; 32];
+        set_id_bytes[..8].copy_from_slice(&1u64.to_le_bytes());
+        beneficiaries[i].register(set_id_bytes, anonymity_set.clone())?;
         step(&format!(
             "{:<6} registered locally at index {}",
             name,
@@ -301,7 +306,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let req = PaymentRegistrationRequest {
             pseudonym: reg.pseudonym.to_vec(),
             public_nullifier: reg.public_nullifier.to_vec(),
-            set_id: reg.set_id,
+            set_id: u64::from_le_bytes(reg.set_id[..8].try_into().unwrap()),
             service_index: reg.service_index as u32,
             friendly_name: reg.friendly_name.clone(),
             proof: proof_bytes,
@@ -500,7 +505,11 @@ impl merchant_pb::merchant_service_server::MerchantService for DemoMerchantServi
         let registration = veiled::core::payment_identity::PaymentIdentityRegistration {
             pseudonym,
             public_nullifier,
-            set_id: req.set_id,
+            set_id: {
+                let mut bytes = [0u8; 32];
+                bytes[..8].copy_from_slice(&req.set_id.to_le_bytes());
+                bytes
+            },
             service_index: req.service_index as usize,
             friendly_name: req.friendly_name.clone(),
             proof,
