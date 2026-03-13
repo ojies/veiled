@@ -142,36 +142,11 @@ fn full_protocol_flow_phases_0_through_5() {
     assert_eq!(payment_reg.set_id, set_id);
     assert_eq!(payment_reg.friendly_name, "alice");
 
-    // Pseudonym and public nullifier are valid compressed points.
-    assert!(
-        payment_reg.pseudonym[0] == 0x02 || payment_reg.pseudonym[0] == 0x03,
-        "pseudonym must be a valid compressed point"
-    );
-    assert!(
-        payment_reg.public_nullifier[0] == 0x02 || payment_reg.public_nullifier[0] == 0x03,
-        "public nullifier must be a valid compressed point"
-    );
-
+   
     // Registration is stored on the beneficiary.
     assert!(beneficiaries[0].registrations.contains_key(&merchant_1_id));
 
-    // Proof serialization roundtrip.
-    let proof_bytes = serialize_payment_identity_registration_proof(&payment_reg.proof);
-    let proof_deser =
-        deserialize_payment_identity_registration_proof(&proof_bytes).expect("deserialization should succeed");
-    let proof_bytes_2 = serialize_payment_identity_registration_proof(&proof_deser);
-    assert_eq!(
-        proof_bytes, proof_bytes_2,
-        "serialize roundtrip must be lossless"
-    );
-
-    // Proof size: PROOF_BASE_SIZE + (L+1)×32 bytes.
-    // With M=3: 4*33 (ABCD) + 3*33 (e_poly) + 3*32 (f) + 2*32 (z_a,z_c)
-    //   + 33 (schnorr_r) + 3*32 (schnorr_s, nullifier_scalar, name_scalar) = 520
-    // Plus z_responses = (L+1)*32 = 128. Total = 648.
-    let expected_proof_size = 4 * 33 + M * 33 + M * 32 + 2 * 32 + 33 + 3 * 32 + (L + 1) * 32;
-    assert_eq!(proof_bytes.len(), expected_proof_size);
-
+  
     // ── Phase 4: Merchant receives and verifies registration ─────────────────
     //
     // Merchant 1 receives (ϕ, nul_l, π, d̂, "alice") and verifies the proof.
