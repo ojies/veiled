@@ -1,0 +1,123 @@
+services:
+  bitcoind:
+    image: docker.io/bitcoin/bitcoin:28.3-alpine
+    container_name: bitcoin-node
+    restart: unless-stopped
+    ports:
+      - "18443:18443"
+      - "18444:18444"
+    volumes:
+      - bitcoin-data:/home/bitcoin/.bitcoin
+    command:
+      - -regtest
+      - -server
+      - -txindex
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcuser=veiled
+      - -rpcpassword=veiled
+      - -fallbackfee=0.00001
+    networks:
+      - veiled
+
+  explorer:
+    image: docker.io/tyzbit/btc-rpc-explorer:latest
+    container_name: bitcoin-explorer
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      - BTCEXP_HOST=0.0.0.0
+      - BTCEXP_PORT=3002
+      - BTCEXP_BITCOIND_HOST=bitcoind
+      - BTCEXP_BITCOIND_PORT=18443
+      - BTCEXP_BITCOIND_USER=veiled
+      - BTCEXP_BITCOIND_PASS=veiled
+      - BTCEXP_REGTEST=true
+      - BTCEXP_ADDRESS_API=none
+      - BTCEXP_SLOW_DEVICE_MODE=true
+      - BTCEXP_NO_RATES=true
+    networks:
+      - veiled
+    depends_on:
+      - bitcoind
+
+  registry:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: registry
+    container_name: veiled-registry
+    restart: unless-stopped
+    ports:
+      - "50051:50051"
+    environment:
+      - BITCOIN_RPC_URL=http://bitcoind:18443
+      - BITCOIN_RPC_USER=veiled
+      - BITCOIN_RPC_PASS=veiled
+      - WALLETS_DIR=/app/data/wallets
+      - LISTEN=0.0.0.0:50051
+    volumes:
+      - wallets:/app/data/wallets
+    networks:
+      - veiled
+    depends_on:
+      - bitcoind
+
+  chain-init:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: registry
+    container_name: veiled-chain-init
+    entrypoint: ["/bin/bash", "/init.sh"]
+    environment:
+      - BITCOIN_RPC_URL=http://bitcoind:18443
+      - BITCOIN_RPC_USER=veiled
+      - BITCOIN_RPC_PASS=veiled
+      - WALLETS_DIR=/app/data/wallets
+    volumes:
+      - wallets:/app/data/wallets
+      - ./scripts/docker-init-chain.sh:/init.sh:ro
+    networks:
+      - veiled
+    depends_on:
+      - bitcoind
+      - registry
+
+  ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: ui
+    container_name: veiled-ui
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - BITCOIN_RPC_URL=http://bitcoind:18443
+      - BITCOIN_RPC_USER=veiled
+      - BITCOIN_RPC_PASS=veiled
+      - REGISTRY_ADDRESS=registry:50051
+      - REGISTRY_SERVER=http://registry:50051
+      - WALLET_BIN=/app/bin/veiled-wallet
+      - HELPER_BIN=/app/bin/veiled-helper
+      - MERCHANT_BIN=/app/bin/merchant
+      - WALLETS_DIR=/app/data/wallets
+      - PROTO_DIR=/app/proto
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+    volumes:
+      - wallets:/app/data/wallets
+    networks:
+      - veiled
+    depends_on:
+      - bitcoind
+      - registry
+
+networks:
+  veiled:
+
+volumes:
+  bitcoin-data:
+  wallets:

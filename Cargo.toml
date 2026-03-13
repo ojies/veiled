@@ -27,6 +27,10 @@ path = "demo/simulate.rs"
 name = "veiled-helper"
 path = "src/bin/veiled_helper.rs"
 
+[[bin]]
+name = "veiled-wallet"
+path = "src/bin/veiled_wallet.rs"
+
 [dependencies]
 # Core
 sha2 = "0.10"
@@ -35,6 +39,8 @@ serde = { version = "1", features = ["derive"] }
 k256 = { version = "0.13", features = ["arithmetic", "hash2curve"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 hkdf = "0.12"
+bip39 = "2"
+bitcoincore-rpc = "0.19"
 
 # Registry
 tokio = { version = "1", features = ["full"] }
@@ -56,4 +62,3 @@ tonic-build = "0.12"
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }
 http-body-util = "0.1"
-bitcoincore-rpc = "0.19"

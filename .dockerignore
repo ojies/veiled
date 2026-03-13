@@ -1,0 +1,7 @@
+target/
+.wallets/
+ui/node_modules/
+ui/.next/
+*.swp
+*.swo
+.git/
