@@ -29,7 +29,7 @@ use crate::core::verify_payment_identity_registration_proof;
 #[derive(Debug, PartialEq, Eq)]
 pub enum VerificationError {
     /// 4.1: anonymity set not cached/fetchable.
-    SetNotFound(u64),
+    SetNotFound([u8; 32]),
     /// 4.2–4.6: cryptographic check failed.
     ProofInvalid,
     /// 4.7: Sybil attempt — same identity already registered.
@@ -62,9 +62,9 @@ pub struct RegistrationResult {
 pub struct VerifierState {
     /// This user's index in the CRS (1-indexed).
     pub user_index: usize,
-    /// Cached frozen anonymity sets — keyed by set_id.
+    /// Cached frozen anonymity sets — keyed by set_id (Merkle root).
     /// Frozen sets never change and can be cached indefinitely (step 4.1).
-    set_cache: HashMap<u64, Vec<Commitment>>,
+    set_cache: HashMap<[u8; 32], Vec<Commitment>>,
     /// Registered nullifiers — for Sybil resistance (step 4.7).
     registered_nullifiers: HashSet<[u8; 33]>,
     /// Registered pseudonyms — for duplicate detection (step 4.7).
@@ -91,12 +91,12 @@ impl VerifierState {
     /// Cache a frozen anonymity set (step 4.1).
     ///
     /// Frozen sets are immutable once sealed, so caching is safe.
-    pub fn cache_set(&mut self, set_id: u64, commitments: Vec<Commitment>) {
+    pub fn cache_set(&mut self, set_id: [u8; 32], commitments: Vec<Commitment>) {
         self.set_cache.insert(set_id, commitments);
     }
 
     /// Look up a cached anonymity set (step 4.1).
-    pub fn get_cached_set(&self, set_id: u64) -> Option<&Vec<Commitment>> {
+    pub fn get_cached_set(&self, set_id: [u8; 32]) -> Option<&Vec<Commitment>> {
         self.set_cache.get(&set_id)
     }
 
@@ -158,7 +158,7 @@ impl VerifierState {
         pseudonym: &[u8; 33],
         public_nullifier: &[u8; 33],
         proof: &PaymentIdentityRegistrationProof,
-        set_id: u64,
+        set_id: [u8; 32],
         friendly_name: &str,
     ) -> Result<RegistrationResult, VerificationError> {
         // 4.1: Fetch anonymity set from cache.
@@ -173,7 +173,7 @@ impl VerifierState {
             crs,
             anonymity_set,
             self.user_index,
-            set_id,
+            &set_id,
             pseudonym,
             public_nullifier,
             proof,
@@ -237,7 +237,7 @@ mod tests {
     }
 
     use crate::core::utils::N;
-    const TEST_SET_ID: u64 = 7;
+    const TEST_SET_ID: [u8; 32] = [7u8; 32];
 
     fn make_full_set(crs: &Crs, target_seed: u8, target_pos: usize) -> (MasterCredential, Vec<Commitment>) {
         let target = make_credential(crs, target_seed);
@@ -265,7 +265,7 @@ mod tests {
         set: &[Commitment],
         target_pos: usize,
         user_index: usize,
-        set_id: u64,
+        set_id: [u8; 32],
     ) -> (PaymentIdentityRegistrationProof, [u8; 33], [u8; 33], String) {
         let all_nullifiers = cred.all_nullifier_scalars(crs);
         let pseudonym = derive_payment_request_pseudonym(&cred.r, &crs.merchants[user_index - 1].name, &crs.g);
@@ -276,7 +276,7 @@ mod tests {
             set,
             target_pos,
             user_index,
-            set_id,
+            &set_id,
             &cred.k.0,
             &all_nullifiers,
             &pseudonym,
@@ -295,7 +295,7 @@ mod tests {
         let vs = VerifierState::new(1);
         assert_eq!(vs.user_index, 1);
         assert_eq!(vs.registered_count(), 0);
-        assert!(vs.get_cached_set(0).is_none());
+        assert!(vs.get_cached_set([0u8; 32]).is_none());
     }
 
     // ── 2. cache_and_retrieve_set ───────────────────────────────────────────
@@ -304,11 +304,11 @@ mod tests {
     fn cache_and_retrieve_set() {
         let mut vs = VerifierState::new(1);
         let dummy = vec![Commitment([0x02; 33]), Commitment([0x03; 33])];
-        vs.cache_set(42, dummy.clone());
-        let retrieved = vs.get_cached_set(42).unwrap();
+        vs.cache_set([42u8; 32], dummy.clone());
+        let retrieved = vs.get_cached_set([42u8; 32]).unwrap();
         assert_eq!(retrieved.len(), 2);
         assert_eq!(retrieved[0], dummy[0]);
-        assert!(vs.get_cached_set(99).is_none());
+        assert!(vs.get_cached_set([99u8; 32]).is_none());
     }
 
     // ── 3. freshness_passes_for_new_values ──────────────────────────────────
@@ -409,14 +409,14 @@ mod tests {
         let service_index = 1;
         let (cred, set) = make_full_set(&crs, 0xBB, 3);
         let (proof, pseudonym, pub_nul, fname) =
-            make_valid_proof(&crs, &cred, &set, 3, service_index, 99);
+            make_valid_proof(&crs, &cred, &set, 3, service_index, [99u8; 32]);
 
         let mut vs = VerifierState::new(service_index);
-        // Do NOT cache set 99.
+        // Do NOT cache set [99; 32].
 
         assert_eq!(
-            vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, 99, &fname),
-            Err(VerificationError::SetNotFound(99))
+            vs.verify_and_register(&crs, &pseudonym, &pub_nul, &proof, [99u8; 32], &fname),
+            Err(VerificationError::SetNotFound([99u8; 32]))
         );
     }
 

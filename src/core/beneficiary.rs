@@ -24,8 +24,8 @@ use crate::core::types::{BlindingKey, ChildRandomness, Commitment, FriendlyName,
 pub struct Beneficiary {
     /// The master credential `(Φ, sk, r, k)`.
     pub credential: MasterCredential,
-    /// `d̂` — which anonymity set the user is in (set after Phase 2).
-    pub set_id: Option<u64>,
+    /// `d̂` — Merkle root of the commitment transaction (set after Phase 2).
+    pub set_id: Option<[u8; 32]>,
     /// `j` — the user's index within `Λ_{d̂}` (0-based, set after Phase 2).
     pub index: Option<usize>,
     /// `Λ_{d̂}` — the complete frozen anonymity set (set after Phase 2).
@@ -72,7 +72,7 @@ impl Beneficiary {
     /// Returns an error if `Φ` is not found in the anonymity set.
     pub fn register(
         &mut self,
-        set_id: u64,
+        set_id: [u8; 32],
         anonymity_set: Vec<Commitment>,
     ) -> Result<(), &'static str> {
         let index = anonymity_set
@@ -128,7 +128,7 @@ impl Beneficiary {
             anonymity_set,
             index,
             merchant_id,
-            set_id,
+            &set_id,
             &self.credential.k.0,
             &all_nullifiers,
             &pseudonym,

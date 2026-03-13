@@ -22,6 +22,7 @@ use crate::core::utils::M;
 
 const L: usize = 3;
 const SET_SIZE: usize = 8; // N = 2^3
+const SATS_PER_USER: u64 = 10_000;
 
 fn funding_outpoint() -> OutPoint {
     OutPoint {
@@ -44,7 +45,7 @@ fn full_protocol_flow_phases_0_through_5() {
         Merchant::new("merchant_3", "https://merchant_3"),
     ];
 
-    let mut registry = Registry::new(SET_SIZE);
+    let mut registry = Registry::new(SET_SIZE, SATS_PER_USER);
     for m in &merchants {
         registry.add_merchant(m.clone());
     }
@@ -84,7 +85,7 @@ fn full_protocol_flow_phases_0_through_5() {
     // Each beneficiary registers their Φ with the registry.
 
     for ben in &beneficiaries {
-        registry.add_beneficiary(ben.credential.phi);
+        registry.add_beneficiary(ben.credential.phi, funding_outpoint());
     }
 
     assert_eq!(registry.beneficiary_count(), SET_SIZE);
@@ -93,32 +94,20 @@ fn full_protocol_flow_phases_0_through_5() {
     assert_eq!(anonymity_set.len(), SET_SIZE);
     assert_eq!(anonymity_set[0], beneficiaries[0].credential.phi);
 
-    // Bridge: convert each Φ to bitcoin::secp256k1::PublicKey for the vtxo tree.
-    let sats_per_user = 10_000u64;
-    let beneficiary_identity_tx_out_list: Vec<IdentityTXO> = anonymity_set
-        .iter()
-        .enumerate()
-        .map(|(i, phi)| {
-            let pk = PublicKey::from_slice(&phi.0).unwrap_or_else(|e| {
-                panic!("Φ[{i}] failed to convert to bitcoin PublicKey: {e}")
-            });
-            IdentityTXO {
-                pubkey: pk,
-                amount: Amount::from_sat(sats_per_user),
-            }
-        })
-        .collect();
+    // Taproot commitment transaction anchoring the anonymity set.
+    let taproot_commitment = registry
+        .create_anonymity_set(funding_outpoint())
+        .expect("taproot commitment should succeed");
+    assert_eq!(taproot_commitment.tx.input.len(), 1);
+    assert_eq!(taproot_commitment.tx.output.len(), 1);
+    assert_eq!(
+        taproot_commitment.tx.output[0].value,
+        Amount::from_sat(SATS_PER_USER * SET_SIZE as u64)
+    );
+    assert!(taproot_commitment.tx.output[0].script_pubkey.is_p2tr());
 
-    // Build the vtxo tree.
-    let tree = build_identity_tree(&beneficiary_identity_tx_out_list, funding_outpoint())
-        .expect("vtxo tree construction should succeed");
-
-    assert_eq!(tree.user_count(), SET_SIZE);
-    assert_eq!(tree.tx_count(), 2); // root + fan-out
-
-    let expected_total = Amount::from_sat(sats_per_user * SET_SIZE as u64);
-    assert_eq!(tree.value(), expected_total);
-
+   
+    
     // All beneficiaries register with the anonymity set (Phase 2 complete).
     let set_id = registry.set_id;
     for ben in &mut beneficiaries {

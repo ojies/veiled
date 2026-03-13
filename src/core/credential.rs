@@ -270,7 +270,7 @@ mod tests {
         set.push(target.credential.phi);
         set.push(make_credential(&crs, 0x03).phi);
 
-        target.register(0, set).unwrap();
+        target.register([0u8; 32], set).unwrap();
         assert_eq!(target.index, Some(2));
     }
 
@@ -282,7 +282,7 @@ mod tests {
             make_credential(&crs, 0x01).phi,
             make_credential(&crs, 0x02).phi,
         ];
-        assert!(target.register(0, set).is_err());
+        assert!(target.register([0u8; 32], set).is_err());
     }
 
     #[test]
@@ -295,9 +295,9 @@ mod tests {
             make_credential(&crs, 0x02).phi,
             make_credential(&crs, 0x03).phi,
         ];
-        ben.register(0, set).unwrap();
+        ben.register([0u8; 32], set).unwrap();
         assert_eq!(ben.index, Some(1));
-        assert_eq!(ben.set_id, Some(0));
+        assert_eq!(ben.set_id, Some([0u8; 32]));
         assert_eq!(ben.set_size(), Some(4));
     }
 
@@ -333,7 +333,7 @@ mod tests {
         anonymity_set.insert(3, ben.credential.phi);
         assert_eq!(anonymity_set.len(), 8);
 
-        ben.register(0, anonymity_set).unwrap();
+        ben.register([0u8; 32], anonymity_set).unwrap();
         assert_eq!(ben.index, Some(3));
         assert_eq!(ben.set_size(), Some(8));
 
@@ -367,15 +367,15 @@ mod tests {
         anonymity_set.insert(5, ben.credential.phi);
         assert_eq!(anonymity_set.len(), 8);
 
-        ben.register(42, anonymity_set.clone()).unwrap();
-        assert_eq!(ben.set_id, Some(42));
+        ben.register([42u8; 32], anonymity_set.clone()).unwrap();
+        assert_eq!(ben.set_id, Some([42u8; 32]));
 
         // Phase 3: Register for service 2 (1-indexed)
         let service_reg = ben.create_payment_registration(&crs, 2).unwrap();
 
         // Check message fields
         assert_eq!(service_reg.service_index, 2);
-        assert_eq!(service_reg.set_id, 42);
+        assert_eq!(service_reg.set_id, [42u8; 32]);
         assert!(service_reg.pseudonym[0] == 0x02 || service_reg.pseudonym[0] == 0x03);
         assert!(service_reg.public_nullifier[0] == 0x02 || service_reg.public_nullifier[0] == 0x03);
 
@@ -395,7 +395,7 @@ mod tests {
 
         // Wrong set_id must also fail
         replayed.service_index = 2;
-        replayed.set_id = 999;
+        replayed.set_id = [0xFFu8; 32];
         assert!(!verify_payment_identity_registration(&crs, &anonymity_set, &replayed));
     }
 }

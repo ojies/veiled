@@ -119,7 +119,7 @@ pub fn fiat_shamir_challenge(
     pseudonym: &[u8; 33],
     public_nullifier: &[u8; 33],
     service_index: usize,
-    set_id: u64,
+    set_id: &[u8; 32],
     name_scalar: &[u8; 32],
     d_set: &[ProjectivePoint],
     a: &ProjectivePoint,
@@ -134,7 +134,7 @@ pub fn fiat_shamir_challenge(
     hasher.update(pseudonym);             // ϕ
     hasher.update(public_nullifier);      // nul_l
     hasher.update(&(service_index as u64).to_be_bytes()); // l
-    hasher.update(&set_id.to_be_bytes()); // d̂
+    hasher.update(set_id);                // d̂ (merkle root)
     hasher.update(name_scalar);           // bind revealed name
     for di in d_set {
         hasher.update(point_to_bytes(di));

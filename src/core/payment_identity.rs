@@ -47,8 +47,8 @@ pub struct PaymentIdentityRegistration {
     pub pseudonym: [u8; 33],
     /// Public nullifier `nul_l = s_l · g` — Sybil resistance token.
     pub public_nullifier: [u8; 33],
-    /// `d̂` — which anonymity set the user is in.
-    pub set_id: u64,
+    /// `d̂` — Merkle root of the commitment transaction (identifies the anonymity set).
+    pub set_id: [u8; 32],
     /// Which service this registration is for (1-indexed).
     pub service_index: usize,
     /// The prover's revealed friendly name — verifier checks
@@ -72,7 +72,7 @@ pub fn verify_payment_identity_registration(
         crs,
         anonymity_set,
         reg.service_index,
-        reg.set_id,
+        &reg.set_id,
         &reg.pseudonym,
         &reg.public_nullifier,
         &reg.proof,
@@ -177,7 +177,7 @@ pub fn prove_payment_identity_registration(
     anonymity_set: &[Commitment],
     index: usize,
     service_index: usize,
-    set_id: u64,
+    set_id: &[u8; 32],
     blinding_key: &[u8; 32],
     nullifier_scalars: &[Nullifier],
     pseudonym: &[u8; 33],
@@ -409,7 +409,7 @@ pub fn verify_payment_identity_registration_proof(
     crs: &Crs,
     anonymity_set: &[Commitment],
     service_index: usize,
-    set_id: u64,
+    set_id: &[u8; 32],
     pseudonym: &[u8; 33],
     public_nullifier: &[u8; 33],
     proof: &PaymentIdentityRegistrationProof,
@@ -717,7 +717,7 @@ mod tests {
         (target, set)
     }
 
-    const TEST_SET_ID: u64 = 0;
+    const TEST_SET_ID: [u8; 32] = [0u8; 32];
 
     #[test]
     fn prove_and_verify_service_registration() {
@@ -735,7 +735,7 @@ mod tests {
             &set,
             target_pos,
             user_index,
-            TEST_SET_ID,
+            &TEST_SET_ID,
             &cred.k.0,
             &all_nullifiers,
             &pseudonym,
@@ -749,7 +749,7 @@ mod tests {
                 &crs,
                 &set,
                 user_index,
-                TEST_SET_ID,
+                &TEST_SET_ID,
                 &pseudonym,
                 &pub_nul,
                 &proof,
@@ -769,7 +769,7 @@ mod tests {
         let pub_nul = cred.public_nullifier(&crs, user_index);
 
         let proof = prove_payment_identity_registration(
-            &crs, &set, 3, user_index, TEST_SET_ID,
+            &crs, &set, 3, user_index, &TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
             &cred.friendly_name.to_scalar_bytes(),
         )
@@ -785,7 +785,7 @@ mod tests {
             &crs.g,
         );
         assert!(!verify_payment_identity_registration_proof(
-            &crs, &set, user_index, TEST_SET_ID,
+            &crs, &set, user_index, &TEST_SET_ID,
             &pseudonym, &wrong_pub, &tampered_proof,
         ));
     }
@@ -801,7 +801,7 @@ mod tests {
         let pub_nul = cred.public_nullifier(&crs, user_index);
 
         let proof = prove_payment_identity_registration(
-            &crs, &set, 4, user_index, TEST_SET_ID,
+            &crs, &set, 4, user_index, &TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
             &cred.friendly_name.to_scalar_bytes(),
         )
@@ -811,7 +811,7 @@ mod tests {
         let other_service = 2;
         let other_pub_nul = cred.public_nullifier(&crs, other_service);
         assert!(!verify_payment_identity_registration_proof(
-            &crs, &set, other_service, TEST_SET_ID,
+            &crs, &set, other_service, &TEST_SET_ID,
             &pseudonym, &other_pub_nul, &proof,
         ));
     }
@@ -827,7 +827,7 @@ mod tests {
         let pub_nul = cred.public_nullifier(&crs, user_index);
 
         let mut proof = prove_payment_identity_registration(
-            &crs, &set, 6, user_index, TEST_SET_ID,
+            &crs, &set, 6, user_index, &TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
             &cred.friendly_name.to_scalar_bytes(),
         )
@@ -837,7 +837,7 @@ mod tests {
         proof.z_responses[0][0] ^= 0xFF;
 
         assert!(!verify_payment_identity_registration_proof(
-            &crs, &set, user_index, TEST_SET_ID,
+            &crs, &set, user_index, &TEST_SET_ID,
             &pseudonym, &pub_nul, &proof,
         ));
     }
@@ -854,7 +854,7 @@ mod tests {
         let pub_nul = cred.public_nullifier(&crs, user_index);
 
         let proof = prove_payment_identity_registration(
-            &crs, &set, 0, user_index, TEST_SET_ID,
+            &crs, &set, 0, user_index, &TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
             &cred.friendly_name.to_scalar_bytes(),
         )
