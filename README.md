@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.svg" alt="Veiled — Pseudonymous Payments" width="700"/>
+  <img src="docs/images/banner.svg" alt="Veiled — Verified Payments, Veiled Identities" width="700"/>
 </p>
 
 
