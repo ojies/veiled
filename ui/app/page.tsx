@@ -40,6 +40,61 @@ function Particles({ count }: { count: number }) {
   );
 }
 
+const PRIVACY_PROPERTIES = [
+  {
+    icon: "\u{1F6E1}",
+    title: "Unlinkable Pseudonyms",
+    desc: "Each merchant receives a cryptographically unique pseudonym. Two colluding merchants cannot link their views of the same beneficiary.",
+  },
+  {
+    icon: "\u{1F6AB}",
+    title: "Sybil Resistance",
+    desc: "Deterministic nullifiers prevent double-registration. Same credential + same merchant always yields the same nullifier.",
+  },
+  {
+    icon: "\u{1F50D}",
+    title: "Zero-Knowledge Proofs",
+    desc: "Bootle/Groth one-out-of-many proofs verify set membership without revealing which commitment is yours.",
+  },
+  {
+    icon: "\u26D3",
+    title: "Bitcoin Anchored",
+    desc: "Anonymity sets are sealed on-chain via VTxO trees of P2TR outputs, providing a tamper-proof public record.",
+  },
+];
+
+const ARCHITECTURE_LAYERS = [
+  {
+    label: "Frontend",
+    items: ["Next.js Web UI", "Role-based flows", "Real-time wallet sync"],
+    color: "#60a5fa",
+  },
+  {
+    label: "API Layer",
+    items: ["REST routes", "gRPC bridge", "JSON stdin/stdout binaries"],
+    color: "#f5a623",
+  },
+  {
+    label: "Crypto & Wallet",
+    items: ["veiled-helper (ZK proofs)", "veiled-wallet (BDK/BIP86)", "Schnorr signatures"],
+    color: "#4ade80",
+  },
+  {
+    label: "Bitcoin",
+    items: ["bitcoind regtest", "P2TR addresses", "VTxO tree"],
+    color: "#f87171",
+  },
+];
+
+const TECH_STACK = [
+  { name: "Rust", desc: "Core cryptography, wallet binary, gRPC services" },
+  { name: "BDK", desc: "bdk_wallet v2 for BIP86 P2TR descriptor wallets" },
+  { name: "secp256k1", desc: "Elliptic curve operations, Pedersen commitments" },
+  { name: "Bitcoin Core", desc: "Regtest node for chain interaction via RPC" },
+  { name: "tonic/prost", desc: "gRPC server and client implementation" },
+  { name: "Next.js", desc: "React-based UI with server-side API routes" },
+];
+
 const PROTOCOL_STEPS = [
   {
     title: "Credential Creation",
@@ -250,6 +305,199 @@ export default function Home() {
               <p style={{ color: "#888", fontSize: "0.83rem", lineHeight: 1.6 }}>
                 {step.desc}
               </p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Privacy Properties */}
+      <section
+        style={{
+          padding: "3rem 1rem",
+          borderTop: "1px solid #1a1a1a",
+        }}
+      >
+        <h2
+          style={{
+            textAlign: "center",
+            fontSize: "clamp(1.2rem, 4vw, 1.6rem)",
+            fontWeight: 700,
+            marginBottom: "0.5rem",
+          }}
+        >
+          Privacy &amp; Security Properties
+        </h2>
+        <p
+          style={{
+            textAlign: "center",
+            color: "#666",
+            marginBottom: "2.5rem",
+            fontSize: "0.9rem",
+          }}
+        >
+          Cryptographic guarantees baked into every layer of the protocol
+        </p>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+            gap: "1.25rem",
+            maxWidth: "900px",
+            margin: "0 auto",
+          }}
+        >
+          {PRIVACY_PROPERTIES.map((prop, i) => (
+            <div key={i} className="privacy-card">
+              <div style={{ fontSize: "1.6rem", marginBottom: "0.75rem" }}>
+                {prop.icon}
+              </div>
+              <h3 style={{ fontWeight: 600, marginBottom: "0.4rem", fontSize: "0.95rem" }}>
+                {prop.title}
+              </h3>
+              <p style={{ color: "#888", fontSize: "0.83rem", lineHeight: 1.6 }}>
+                {prop.desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Architecture Overview */}
+      <section
+        style={{
+          padding: "3rem 1rem",
+          borderTop: "1px solid #1a1a1a",
+          background: "linear-gradient(180deg, transparent, #0d0d0d 40%)",
+        }}
+      >
+        <h2
+          style={{
+            textAlign: "center",
+            fontSize: "clamp(1.2rem, 4vw, 1.6rem)",
+            fontWeight: 700,
+            marginBottom: "0.5rem",
+          }}
+        >
+          Architecture
+        </h2>
+        <p
+          style={{
+            textAlign: "center",
+            color: "#666",
+            marginBottom: "2.5rem",
+            fontSize: "0.9rem",
+          }}
+        >
+          Four layers from UI to blockchain
+        </p>
+
+        <div className="arch-stack">
+          {ARCHITECTURE_LAYERS.map((layer, i) => (
+            <div key={i} className="arch-layer" style={{ "--layer-color": layer.color } as React.CSSProperties}>
+              <div className="arch-label">{layer.label}</div>
+              <div className="arch-items">
+                {layer.items.map((item, j) => (
+                  <span key={j} className="arch-item">{item}</span>
+                ))}
+              </div>
+              {i < ARCHITECTURE_LAYERS.length - 1 && (
+                <div className="arch-connector">
+                  <svg width="16" height="24" viewBox="0 0 16 24" fill="none">
+                    <path d="M8 0 L8 18 M3 14 L8 20 L13 14" stroke="#333" strokeWidth="1.5" />
+                  </svg>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Numbers */}
+      <section
+        style={{
+          padding: "3rem 1rem",
+          borderTop: "1px solid #1a1a1a",
+        }}
+      >
+        <h2
+          style={{
+            textAlign: "center",
+            fontSize: "clamp(1.2rem, 4vw, 1.6rem)",
+            fontWeight: 700,
+            marginBottom: "2.5rem",
+          }}
+        >
+          By the Numbers
+        </h2>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+            gap: "1.25rem",
+            maxWidth: "800px",
+            margin: "0 auto",
+          }}
+        >
+          {[
+            { value: "33", unit: "bytes", label: "Commitment size" },
+            { value: "65", unit: "bytes", label: "Schnorr proof" },
+            { value: "6", unit: "phases", label: "Protocol flow" },
+            { value: "0", unit: "trust", label: "Third parties" },
+          ].map((stat, i) => (
+            <div key={i} className="number-card">
+              <div className="number-value">
+                {stat.value}<span className="number-unit">{stat.unit}</span>
+              </div>
+              <div className="number-label">{stat.label}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Built With */}
+      <section
+        style={{
+          padding: "3rem 1rem",
+          borderTop: "1px solid #1a1a1a",
+          background: "linear-gradient(180deg, transparent, #0d0d0d 40%)",
+        }}
+      >
+        <h2
+          style={{
+            textAlign: "center",
+            fontSize: "clamp(1.2rem, 4vw, 1.6rem)",
+            fontWeight: 700,
+            marginBottom: "0.5rem",
+          }}
+        >
+          Built With
+        </h2>
+        <p
+          style={{
+            textAlign: "center",
+            color: "#666",
+            marginBottom: "2.5rem",
+            fontSize: "0.9rem",
+          }}
+        >
+          Production-grade open-source tooling
+        </p>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+            gap: "1rem",
+            maxWidth: "800px",
+            margin: "0 auto",
+          }}
+        >
+          {TECH_STACK.map((tech, i) => (
+            <div key={i} className="tech-card">
+              <span className="tech-name">{tech.name}</span>
+              <span className="tech-desc">{tech.desc}</span>
             </div>
           ))}
         </div>

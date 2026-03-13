@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getRegistryClient, grpcCall } from "@/lib/grpc";
 import { getState, setAnonymitySet, setPhase, setFunding } from "@/lib/state";
 import { getBalance, send, faucet, createWallet } from "@/lib/wallet";
+import { DEFAULT_SATS_PER_USER } from "@/lib/config";
 
 export async function POST(request: Request) {
   try {
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
       set_id: state.set_id,
     });
     const count = setResp.count || 1;
-    const satsPerUser = Math.floor(registryBalance.confirmed / count) || 10000;
+    const satsPerUser = Math.floor(registryBalance.confirmed / count) || DEFAULT_SATS_PER_USER;
 
     // Send the funding amount to registry's own address (creates UTXO)
     // In a real system this would go to the VTxO tree address

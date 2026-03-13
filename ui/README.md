@@ -122,3 +122,10 @@ The UI expects:
 | `MERCHANT_BIN` | `../target/release/merchant` | Path to merchant binary |
 | `WALLETS_DIR` | `../.wallets` | Directory for wallet state files |
 | `PROTO_DIR` | `../proto` | Directory containing .proto files |
+| `BENEFICIARY_CAPACITY` | `2` | Slots per anonymity set (must be power of 2) |
+| `MIN_MERCHANTS` | `1` | Minimum merchants before set creation |
+| `MERCHANT_REGISTRATION_FEE` | `5000` | Merchant registration fee (sats) |
+| `DEFAULT_SATS_PER_USER` | `10000` | Fallback sats-per-user for VTxO tree |
+| `MERCHANT_START_PORT` | `50061` | Starting port for merchant gRPC servers |
+| `MERCHANT_STARTUP_DELAY` | `1500` | Wait time (ms) after spawning merchant |
+| `MATURITY_BLOCKS` | `100` | Blocks mined to mature coinbase outputs |

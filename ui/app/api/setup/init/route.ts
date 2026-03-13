@@ -12,8 +12,7 @@ import {
   setRegistryAddress,
 } from "@/lib/state";
 import { createWallet, walletExists } from "@/lib/wallet";
-
-const SET_CAPACITY = 8;
+import { BENEFICIARY_CAPACITY, MIN_MERCHANTS } from "@/lib/config";
 
 export async function POST() {
   try {
@@ -34,7 +33,7 @@ export async function POST() {
         merchants: state.merchants,
         crs_hex: state.crs_hex,
         set_id: state.set_id,
-        capacity: state.anonymity_set?.capacity || SET_CAPACITY,
+        capacity: state.anonymity_set?.capacity || BENEFICIARY_CAPACITY,
         registry_address: state.registry_address,
         already_initialized: true,
       });
@@ -50,9 +49,9 @@ export async function POST() {
       ),
     }));
 
-    if (merchants.length === 0) {
+    if (merchants.length < MIN_MERCHANTS) {
       return NextResponse.json({
-        error: "No merchants registered yet. Create merchants first.",
+        error: `Need at least ${MIN_MERCHANTS} merchant(s) registered. Currently: ${merchants.length}.`,
         waiting: true,
       });
     }
@@ -63,7 +62,7 @@ export async function POST() {
     await grpcCall(registry, "CreateSet", {
       set_id: state.set_id,
       merchant_names: merchants.map((m: any) => m.name),
-      beneficiary_capacity: SET_CAPACITY,
+      beneficiary_capacity: BENEFICIARY_CAPACITY,
     });
 
     // Fetch CRS
@@ -77,7 +76,7 @@ export async function POST() {
       commitments: [],
       finalized: false,
       count: 0,
-      capacity: SET_CAPACITY,
+      capacity: BENEFICIARY_CAPACITY,
     });
     setPhase(0);
 
@@ -85,7 +84,7 @@ export async function POST() {
       merchants,
       crs_hex: crsHex,
       set_id: state.set_id,
-      capacity: SET_CAPACITY,
+      capacity: BENEFICIARY_CAPACITY,
       registry_address: state.registry_address,
     });
   } catch (err: any) {

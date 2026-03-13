@@ -5,6 +5,12 @@ import { spawn } from "child_process";
 import path from "path";
 import { getState, addMerchantProcess } from "@/lib/state";
 import { createWallet, getBalance, send, faucet } from "@/lib/wallet";
+import {
+  MERCHANT_REGISTRATION_FEE,
+  MERCHANT_START_PORT,
+  MERCHANT_STARTUP_DELAY,
+  MATURITY_BLOCKS,
+} from "@/lib/config";
 
 const MERCHANT_BIN =
   process.env.MERCHANT_BIN ||
@@ -14,7 +20,7 @@ const REGISTRY_SERVER =
   process.env.REGISTRY_SERVER || "http://[::1]:50051";
 
 // Track the next available port
-let nextPort = 50061;
+let nextPort = MERCHANT_START_PORT;
 
 export async function POST(request: Request) {
   try {
@@ -43,17 +49,13 @@ export async function POST(request: Request) {
     const walletName = `merchant-${name.toLowerCase().replace(/\s+/g, "-")}`;
     const wallet = createWallet(walletName);
 
-    // Fund merchant wallet via faucet (mine 1 block to its address + 100 to mature)
+    // Fund merchant wallet via faucet (mine 1 block to its address + blocks to mature)
     faucet(wallet.address, 1);
-    // Mine 100 blocks to a throwaway address to mature the coinbase
     const dummyWallet = createWallet("faucet-miner");
-    faucet(dummyWallet.address, 100);
-
-    // Pay registration fee to registry (5,000 sats)
-    const REGISTRATION_FEE = 5000;
+    faucet(dummyWallet.address, MATURITY_BLOCKS);
     if (state.registry_address) {
       try {
-        send(walletName, state.registry_address, REGISTRATION_FEE);
+        send(walletName, state.registry_address, MERCHANT_REGISTRATION_FEE);
         // Mine a block to confirm
         faucet(dummyWallet.address, 1);
       } catch (e: any) {
@@ -116,7 +118,7 @@ export async function POST(request: Request) {
     });
 
     // Give it a moment to start
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, MERCHANT_STARTUP_DELAY));
 
     const balance = getBalance(walletName);
 
