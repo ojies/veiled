@@ -25,16 +25,11 @@ async fn main() {
                 .expect("VEILED_USER_INDEX must be a positive integer (1-indexed)");
             assert!(user_index >= 1, "VEILED_USER_INDEX must be >= 1");
 
-            let providers: Vec<veiled::core::crs::Merchant> = providers_str
+            let merchants: Vec<veiled::core::merchant::Merchant> = providers_str
                 .split(',')
-                .map(|name| veiled::core::crs::Merchant {
-                    name: veiled::core::types::Name::new(name.trim()),
-                    credential_generator: [0x02; 33],
-                    origin: String::new(),
-                })
+                .map(|name| veiled::core::merchant::Merchant::new(name.trim(), ""))
                 .collect();
-
-            let crs = veiled::core::crs::Crs::setup(providers);
+            let crs = veiled::core::crs::Crs::setup(merchants, 1024);
             info!("verifier mode: user_index={user_index}, CRS with {} providers", crs.num_merchants());
             AppState::with_verifier(store, db, crs, user_index)
         }

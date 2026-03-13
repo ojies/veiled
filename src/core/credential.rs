@@ -21,7 +21,6 @@
 use hkdf::Hkdf;
 use sha2::Sha256;
 
-use crate::core::PaymentIdentityRegistration;
 use crate::core::crs::Crs;
 use crate::core::nullifier::{derive_all_nullifiers, derive_nullifier, derive_public_nullifier};
 use crate::core::types::{BlindingKey, ChildRandomness, Commitment, FriendlyName, MasterSecret, Name, Nullifier};
@@ -144,133 +143,24 @@ pub fn derive_child_randomness(real_randomness: &[u8; 32], name: &Name) -> Child
     ChildRandomness(output)
 }
 
-/// A registered master credential — the user's full state after Phase 2.
-///
-/// After registration and the anonymity set filling to N=1024, the user
-/// stores this locally. The frozen anonymity set is needed for generating
-/// Bootle/Groth membership proofs in Phase 3.
-///
-/// ```text
-/// (Φ_j, sk, r, k, d̂, Λ_{d̂})
-/// ```
-#[derive(Debug, Clone)]
-pub struct Beneficiary {
-    /// The master credential `(Φ, sk, r, k)`.
-    pub credential: MasterCredential,
-    /// `d̂` — which anonymity set the user is in.
-    pub set_id: u64,
-    /// `j` — the user's index within `Λ_{d̂}` (0-based).
-    pub index: usize,
-    /// `Λ_{d̂}` — the complete frozen anonymity set `[Φ_1, ..., Φ_N]`.
-    pub anonymity_set: Vec<Commitment>,
-}
-
-impl Beneficiary {
-    /// Construct a `RegisteredIdentity` after Phase 2 completes.
-    ///
-    /// Finds the user's index `j` by searching for their `Φ` in the set.
-    /// Returns an error if `Φ` is not found in the anonymity set.
-    pub fn new(
-        credential: MasterCredential,
-        set_id: u64,
-        anonymity_set: Vec<Commitment>,
-    ) -> Result<Self, &'static str> {
-        let index = Self::determine_index(&credential, &anonymity_set)
-            .ok_or("master identity not found in anonymity set")?;
-        Ok(Self {
-            credential,
-            set_id,
-            index,
-            anonymity_set,
-        })
-    }
-
-    /// Find the user's index `j` by searching for `Φ` in the anonymity set.
-    pub fn determine_index(credential: &MasterCredential, set: &[Commitment]) -> Option<usize> {
-        set.iter().position(|c| *c == credential.phi)
-    }
-
-    /// Returns the number of identities in the anonymity set.
-    pub fn set_size(&self) -> usize {
-        self.anonymity_set.len()
-    }
-
-    /// Register for a specific service provider (Phase 3).
-    ///
-    /// Generates the full service registration message:
-    /// ```text
-    /// (ϕ, nul_l, π, d̂)
-    /// ```
-    ///
-    /// - `service_index`: 1-indexed service provider in the CRS.
-    ///
-    /// Returns a `PaymentRequest` containing the pseudonym, public
-    /// nullifier, and the adapted Bootle proof (which embeds `s_l`).
-    pub fn create_payment_registration(
-        &self,
-        crs: &Crs,
-        payer_index: usize,
-    ) -> Result<PaymentIdentityRegistration, &'static str> {
-        use crate::core::request::derive_payment_request_pseudonym;
-        use crate::core::payment_identity::prove_payment_identity_registration;
-
-        if payer_index < 1 || payer_index > crs.num_merchants() {
-            return Err("service_index out of range");
-        }
-
-        let name = &crs.merchants[payer_index - 1].name;
-        let pseudonym = derive_payment_request_pseudonym(&self.credential.r, name, &crs.g);
-        let pub_nul = self.credential.public_nullifier(crs, payer_index);
-        let all_nullifiers = self.credential.all_nullifier_scalars(crs);
-
-        let name_scalar = self.credential.friendly_name.to_scalar_bytes();
-        let proof = prove_payment_identity_registration(
-            crs,
-            &self.anonymity_set,
-            self.index,
-            payer_index,
-            self.set_id,
-            &self.credential.k.0,
-            &all_nullifiers,
-            &pseudonym,
-            &pub_nul,
-            &name_scalar,
-        )?;
-
-        Ok(PaymentIdentityRegistration {
-            pseudonym,
-            public_nullifier: pub_nul,
-            set_id: self.set_id,
-            service_index: payer_index,
-            friendly_name: self.credential.friendly_name.as_str().to_string(),
-            proof,
-        })
-    }
-}
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::crs::Merchant;
-    use crate::core::payment_identity::verify_payment_identity_registration;
-    use crate::core::types::Name;
+    use crate::core::beneficiary::Beneficiary;
+    use crate::core::merchant::Merchant;
+    use crate::core::payment_identity::{PaymentIdentityRegistration, verify_payment_identity_registration};
     use crate::core::nullifier::derive_all_public_nullifiers;
 
     fn make_provider(name: &str) -> Merchant {
-        Merchant {
-            name: Name::new(name),
-            credential_generator: [0x02; 33],
-            origin: format!("https://{name}"),
-        }
+        Merchant::new(name, &format!("https://{name}"))
     }
 
     fn make_crs(n: usize) -> Crs {
-        let users: Vec<Merchant> = (0..n)
+        use crate::core::utils::N;
+        let merchants: Vec<Merchant> = (0..n)
             .map(|i| make_provider(&format!("service-{i}")))
             .collect();
-        Crs::setup(users)
+        Crs::setup(merchants, N)
     }
 
     fn make_credential(crs: &Crs, seed: u8) -> MasterCredential {
@@ -279,6 +169,24 @@ mod tests {
         let k = BlindingKey([seed.wrapping_add(2); 32]);
         let name = FriendlyName::new(format!("user-{seed:02x}"));
         MasterCredential::create(crs, sk, r, k, name)
+    }
+
+    /// Deterministic beneficiary for tests (bypasses random generation).
+    fn make_beneficiary(crs: &Crs, seed: u8, friendly_name: &str) -> Beneficiary {
+        let credential = MasterCredential::create(
+            crs,
+            MasterSecret([seed; 32]),
+            ChildRandomness([seed.wrapping_add(1); 32]),
+            BlindingKey([seed.wrapping_add(2); 32]),
+            FriendlyName::new(friendly_name),
+        );
+        Beneficiary {
+            credential,
+            set_id: None,
+            index: None,
+            anonymity_set: None,
+            registrations: std::collections::HashMap::new(),
+        }
     }
 
     // ── Phase 1 tests ───────────────────────────────────────────────────────
@@ -353,52 +261,44 @@ mod tests {
     // ── Phase 2 tests ───────────────────────────────────────────────────────
 
     #[test]
-    fn determine_index_finds_own_phi() {
+    fn register_finds_own_phi() {
         let crs = make_crs(3);
-        let target = make_credential(&crs, 0x42);
-        // Build a set with the target at position 2
+        let mut target = make_beneficiary(&crs, 0x42, "target");
         let mut set = Vec::new();
         set.push(make_credential(&crs, 0x01).phi);
         set.push(make_credential(&crs, 0x02).phi);
-        set.push(target.phi);
+        set.push(target.credential.phi);
         set.push(make_credential(&crs, 0x03).phi);
 
-        assert_eq!(Beneficiary::determine_index(&target, &set), Some(2));
+        target.register(0, set).unwrap();
+        assert_eq!(target.index, Some(2));
     }
 
     #[test]
-    fn determine_index_returns_none_if_not_found() {
+    fn register_fails_if_not_in_set() {
         let crs = make_crs(3);
-        let target = make_credential(&crs, 0x42);
+        let mut target = make_beneficiary(&crs, 0x42, "target");
         let set = vec![
             make_credential(&crs, 0x01).phi,
             make_credential(&crs, 0x02).phi,
         ];
-        assert_eq!(Beneficiary::determine_index(&target, &set), None);
+        assert!(target.register(0, set).is_err());
     }
 
     #[test]
-    fn registered_identity_new_succeeds() {
+    fn register_succeeds() {
         let crs = make_crs(3);
-        let target = make_credential(&crs, 0x42);
+        let mut ben = make_beneficiary(&crs, 0x42, "target");
         let set = vec![
             make_credential(&crs, 0x01).phi,
-            target.phi,
+            ben.credential.phi,
             make_credential(&crs, 0x02).phi,
             make_credential(&crs, 0x03).phi,
         ];
-        let reg = Beneficiary::new(target, 0, set).unwrap();
-        assert_eq!(reg.index, 1);
-        assert_eq!(reg.set_id, 0);
-        assert_eq!(reg.set_size(), 4);
-    }
-
-    #[test]
-    fn registered_identity_new_fails_if_not_in_set() {
-        let crs = make_crs(3);
-        let target = make_credential(&crs, 0x42);
-        let set = vec![make_credential(&crs, 0x01).phi, make_credential(&crs, 0x02).phi];
-        assert!(Beneficiary::new(target, 0, set).is_err());
+        ben.register(0, set).unwrap();
+        assert_eq!(ben.index, Some(1));
+        assert_eq!(ben.set_id, Some(0));
+        assert_eq!(ben.set_size(), Some(4));
     }
 
     #[test]
@@ -406,41 +306,40 @@ mod tests {
         // Phase 0: Setup CRS with 4 service users
         let crs = make_crs(4);
 
-        // Phase 1: Create master credential (local, offline)
-        let my_cred = make_credential(&crs, 0xAA);
+        // Phase 1: Create beneficiary (local, offline)
+        let mut ben = make_beneficiary(&crs, 0xAA, "my-user");
 
         // Verify all nullifier scalars are unique
-        let scalars = my_cred.all_nullifier_scalars(&crs);
+        let scalars = ben.credential.all_nullifier_scalars(&crs);
         let unique: std::collections::HashSet<_> = scalars.iter().map(|n| n.0).collect();
         assert_eq!(unique.len(), 4);
 
         // Verify public nullifiers are valid points
         let names = crs.names();
-        let pub_nuls = derive_all_public_nullifiers(&my_cred.sk, &names, &crs.g);
+        let pub_nuls = derive_all_public_nullifiers(&ben.credential.sk, &names, &crs.g);
         for pn in &pub_nuls {
             assert!(pn[0] == 0x02 || pn[0] == 0x03);
         }
 
         // Verify Φ is reproducible
-        assert_eq!(my_cred.recompute_phi(&crs), my_cred.phi);
+        assert_eq!(ben.credential.recompute_phi(&crs), ben.credential.phi);
 
         // Phase 2: Register + fill anonymity set
-        // Simulate: my_cred is one of 8 users (power of 2 for vtxo-tree)
         let mut anonymity_set = Vec::new();
         for seed in 1..=7u8 {
             anonymity_set.push(make_credential(&crs, seed).phi);
         }
         // Insert our credential at position 3
-        anonymity_set.insert(3, my_cred.phi);
+        anonymity_set.insert(3, ben.credential.phi);
         assert_eq!(anonymity_set.len(), 8);
 
-        // Determine own index
-        let reg = Beneficiary::new(my_cred, 0, anonymity_set).unwrap();
-        assert_eq!(reg.index, 3);
-        assert_eq!(reg.set_size(), 8);
+        ben.register(0, anonymity_set).unwrap();
+        assert_eq!(ben.index, Some(3));
+        assert_eq!(ben.set_size(), Some(8));
 
         // Verify the commitment at our index matches
-        assert_eq!(reg.anonymity_set[reg.index], reg.credential.phi);
+        let anon_set = ben.anonymity_set.as_ref().unwrap();
+        assert_eq!(anon_set[ben.index.unwrap()], ben.credential.phi);
     }
 
     // ── Phase 3 tests ───────────────────────────────────────────────────────
@@ -450,29 +349,29 @@ mod tests {
         // Phase 0: CRS with 3 users (names)
         let crs = make_crs(3);
 
-        // Phase 1: Create master credential
-        let my_cred = make_credential(&crs, 0xBB);
+        // Phase 1: Create beneficiary
+        let mut ben = make_beneficiary(&crs, 0xBB, "my-user");
 
-        // Phase 2: Build anonymity set (1024 members for vtxo-tree)
-        // Use unique two-byte secrets to avoid collisions with my_cred (seed 0xBB)
+        // Phase 2: Build anonymity set (N members for vtxo-tree)
+        // Use unique secrets to avoid collisions with ben (seed 0xBB)
         let mut anonymity_set = Vec::new();
-        for i in 0..1023u16 {
-            let sk = MasterSecret([(i >> 8) as u8; 32]);
-            let r = ChildRandomness([(i & 0xFF) as u8; 32]);
+        for i in 0..7u16 {
+            let sk = MasterSecret([(i & 0xFF) as u8; 32]);
+            let r = ChildRandomness([((i + 1) & 0xFF) as u8; 32]);
             let k = BlindingKey([((i.wrapping_add(7)) & 0xFF) as u8; 32]);
             let name = FriendlyName::new(format!("filler-{i}"));
             let cred = MasterCredential::create(&crs, sk, r, k, name);
             anonymity_set.push(cred.phi);
         }
-        // Insert our credential at position 500
-        anonymity_set.insert(500, my_cred.phi);
-        assert_eq!(anonymity_set.len(), 1024);
+        // Insert our credential at position 5
+        anonymity_set.insert(5, ben.credential.phi);
+        assert_eq!(anonymity_set.len(), 8);
 
-        let reg_id = Beneficiary::new(my_cred, 42, anonymity_set.clone()).unwrap();
-        assert_eq!(reg_id.set_id, 42);
+        ben.register(42, anonymity_set.clone()).unwrap();
+        assert_eq!(ben.set_id, Some(42));
 
         // Phase 3: Register for service 2 (1-indexed)
-        let service_reg = reg_id.create_payment_registration(&crs, 2).unwrap();
+        let service_reg = ben.create_payment_registration(&crs, 2).unwrap();
 
         // Check message fields
         assert_eq!(service_reg.service_index, 2);

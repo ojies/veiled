@@ -17,8 +17,8 @@ use sha2::{Digest, };
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
-pub const M: usize = 10; // bits
-pub const N: usize = 1 << M; // 1024
+pub const M: usize = 3; // bits
+pub const N: usize = 1 << M; // 8
 
 /// CRS domain separation tag — shared with crs.rs.
 pub const CRS_DST: &[u8] = b"CRS-ASC-v1";

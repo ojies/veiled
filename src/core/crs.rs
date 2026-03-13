@@ -22,28 +22,11 @@ use k256::{
 };
 use sha2::Sha256;
 
+use crate::core::merchant::Merchant;
 use crate::core::types::{BlindingKey, Commitment, Name, Nullifier};
 
 /// Domain separation tag for CRS generator derivation.
 const CRS_DST: &[u8] = b"CRS-ASC-v1";
-
-// ── types ────────────────────────────────────────────────────────────────────
-
-/// A user registered in the CRS.
-///
-/// Each user has a unique name `v_l` (every user is also a service
-/// provider), a credential generator `G_auth_l`, and an origin URL.
-#[derive(Debug, Clone)]
-pub struct Merchant {
-    /// Unique name v_l — every user is also a service provider.
-    /// Used as the HKDF salt for nullifier derivation.
-    pub name: Name,
-    /// Credential generator G_auth_l (compressed secp256k1 point).
-    /// Application-specific public key for the service's auth scheme.
-    pub credential_generator: [u8; 33],
-    /// Origin URL for the service provider.
-    pub origin: String,
-}
 
 /// The Common Reference String for the ASC protocol.
 ///
@@ -53,6 +36,7 @@ pub struct Merchant {
 /// ```text
 /// crs = (G, q, g, h_1..h_L, v_1..v_L, G_auth_1..G_auth_L)
 /// ```
+#[derive(Debug, Clone)]
 pub struct Crs {
     /// Security parameter λ (128).
     pub security_param: u32,
@@ -81,17 +65,16 @@ fn bytes_to_scalar(b: &[u8; 32]) -> Scalar {
 impl Crs {
     /// `ASCCRS.Setup(λ, merchants)`
     ///
-    /// Generates the Common Reference String:
-    /// - Step 1: secp256k1 is implicit (k256 crate).
-    /// - Step 2: Generate L+1 independent generators via HashToCurve.
-    /// - Step 3: Register service merchants (already provided as input).
+    /// Generates the Common Reference String for the given set of merchants.
     ///
-    /// The generators are derived deterministically from public strings,
-    /// guaranteeing nobody knows the discrete log of any generator relative
-    /// to any other (NUMS — Nothing Up My Sleeve).
-    pub fn setup(merchants: Vec<Merchant>) -> Self {
-        let l = merchants.len();
-
+    /// Derives all generators deterministically via HashToCurve:
+    /// - `g  = HashToCurve("CRS-ASC-generator-0")`
+    /// - `h_name = HashToCurve("CRS-ASC-generator-name")`
+    /// - `h_l = HashToCurve("CRS-ASC-generator-{l}")` for each merchant l = 1..L
+    ///
+    /// All generators are NUMS (Nothing Up My Sleeve) points — nobody knows
+    /// the discrete log of any generator relative to any other.
+    pub fn setup(merchants: Vec<Merchant>, set_size: usize) -> Self {
         // g = HashToCurve("CRS-ASC-generator-0")
         let g = Secp256k1::hash_from_bytes::<ExpandMsgXmd<Sha256>>(
             &[b"CRS-ASC-generator-0"],
@@ -106,17 +89,17 @@ impl Crs {
         )
         .expect("hash_to_curve never fails for secp256k1");
 
-        // h_1..h_L (1-indexed in the spec, 0-indexed in the Vec)
-        let generators: Vec<ProjectivePoint> = (1..=l)
-            .map(|i| {
-                let tag = format!("CRS-ASC-generator-{i}");
-                Secp256k1::hash_from_bytes::<ExpandMsgXmd<Sha256>>(
-                    &[tag.as_bytes()],
-                    &[CRS_DST],
-                )
-                .expect("hash_to_curve never fails for secp256k1")
-            })
-            .collect();
+        // h_l for each merchant
+        let mut generators = Vec::with_capacity(merchants.len());
+        for l in 1..=merchants.len() {
+            let tag = format!("CRS-ASC-generator-{l}");
+            let h = Secp256k1::hash_from_bytes::<ExpandMsgXmd<Sha256>>(
+                &[tag.as_bytes()],
+                &[CRS_DST],
+            )
+            .expect("hash_to_curve never fails for secp256k1");
+            generators.push(h);
+        }
 
         Crs {
             security_param: 128,
@@ -124,7 +107,7 @@ impl Crs {
             h_name,
             generators,
             merchants,
-            set_size: 1024,
+            set_size,
         }
     }
 
@@ -353,6 +336,8 @@ impl Crs {
                 name,
                 credential_generator,
                 origin,
+                merchant_id: merchants.len() + 1,
+                registered_identities: std::collections::HashMap::new(),
             });
         }
 
@@ -374,31 +359,26 @@ mod tests {
     use crate::core::types::MasterSecret;
 
     fn make_user(name: &str) -> Merchant {
-        Merchant {
-            name: Name::new(name),
-            credential_generator: [0x02; 33], // placeholder compressed point
-            origin: format!("https://{name}"),
-        }
+        Merchant::new(name, &format!("https://{name}"))
     }
 
-    fn make_merchants(count: usize) -> Vec<Merchant> {
-        (0..count)
+    fn make_crs_with(count: usize) -> Crs {
+        let merchants: Vec<Merchant> = (0..count)
             .map(|i| make_user(&format!("service-{i}")))
-            .collect()
+            .collect();
+        Crs::setup(merchants, 1024)
     }
 
     #[test]
     fn setup_creates_correct_number_of_generators() {
-        let providers = make_merchants(5);
-        let crs = Crs::setup(providers);
+        let crs = make_crs_with(5);
         assert_eq!(crs.num_merchants(), 5);
         assert_eq!(crs.generators.len(), 5);
     }
 
     #[test]
     fn generators_are_all_different() {
-        let providers = make_merchants(10);
-        let crs = Crs::setup(providers);
+        let crs = make_crs_with(10);
 
         // g should differ from all h_l
         let g_bytes: [u8; 33] = crs.g.to_affine().to_bytes().into();
@@ -422,10 +402,8 @@ mod tests {
 
     #[test]
     fn setup_is_deterministic() {
-        let p1 = make_merchants(3);
-        let p2 = make_merchants(3);
-        let crs1 = Crs::setup(p1);
-        let crs2 = Crs::setup(p2);
+        let crs1 = make_crs_with(3);
+        let crs2 = make_crs_with(3);
 
         let g1: [u8; 33] = crs1.g.to_affine().to_bytes().into();
         let g2: [u8; 33] = crs2.g.to_affine().to_bytes().into();
@@ -440,7 +418,7 @@ mod tests {
 
     #[test]
     fn h_accessor_1_indexed() {
-        let crs = Crs::setup(make_merchants(3));
+        let crs = make_crs_with(3);
         let h1_via_accessor: [u8; 33] = crs.h(1).to_affine().to_bytes().into();
         let h1_direct: [u8; 33] = crs.generators[0].to_affine().to_bytes().into();
         assert_eq!(h1_via_accessor, h1_direct);
@@ -449,7 +427,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "generator index out of range")]
     fn h_panics_on_zero_index() {
-        let crs = Crs::setup(make_merchants(3));
+        let crs = make_crs_with(3);
         let _ = crs.h(0);
     }
 
@@ -457,7 +435,7 @@ mod tests {
 
     #[test]
     fn commit_master_identity_deterministic() {
-        let crs = Crs::setup(make_merchants(3));
+        let crs = make_crs_with(3);
         let secret = MasterSecret([0x42u8; 32]);
         let names = crs.names();
         let nullifiers = derive_all_nullifiers(&secret, &names);
@@ -470,7 +448,7 @@ mod tests {
 
     #[test]
     fn commit_different_blinding_gives_different_commitment() {
-        let crs = Crs::setup(make_merchants(3));
+        let crs = make_crs_with(3);
         let secret = MasterSecret([0x42u8; 32]);
         let names = crs.names();
         let nullifiers = derive_all_nullifiers(&secret, &names);
@@ -496,7 +474,7 @@ mod tests {
 
     #[test]
     fn commit_wrong_nullifier_count_errors() {
-        let crs = Crs::setup(make_merchants(3));
+        let crs = make_crs_with(3);
         let blinding = BlindingKey([0x07u8; 32]);
         let too_few = vec![Nullifier([0u8; 32]), Nullifier([1u8; 32])];
         assert!(crs.commit_master_identity(&too_few, &blinding, &TEST_NAME).is_err());
@@ -509,7 +487,7 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_roundtrip() {
-        let crs = Crs::setup(make_merchants(3));
+        let crs = make_crs_with(3);
         let bytes = crs.to_bytes();
         let crs2 = Crs::from_bytes(&bytes).expect("deserialization should succeed");
 
@@ -546,13 +524,12 @@ mod tests {
         // 3. Derive all nullifiers
         // 4. Commit master identity
 
-        let providers = vec![
+        let crs = Crs::setup(vec![
             make_user("twitter.com"),
             make_user("github.com"),
             make_user("nostr.com"),
             make_user("bitcoin.org"),
-        ];
-        let crs = Crs::setup(providers);
+        ], 1024);
         assert_eq!(crs.num_merchants(), 4);
 
         // User's master secret

@@ -16,7 +16,7 @@
 //!
 //! Additionally includes π_value: a Schnorr proof that `nul_l = s_l · g`.
 //!
-//! Proof size: `975 + (L+1)×32` bytes.
+//! Proof size: `PROOF_BASE_SIZE + (L+1)×32` bytes.
 
 
 use crate::core::crs::Crs;
@@ -41,6 +41,7 @@ use k256::{
 ///
 /// The nullifier scalar `s_l` and name scalar `SHA256(friendly_name)` are
 /// embedded inside π (self-contained proof).
+#[derive(Debug, Clone)]
 pub struct PaymentIdentityRegistration {
     /// Pseudonym `ϕ = csk_l · g` — the user's public identity at this service.
     pub pseudonym: [u8; 33],
@@ -109,10 +110,10 @@ pub fn verify_name_revelation(
 /// - π_membership: compact Bootle/Groth one-out-of-many proof (A, B, C, D, E, f, z)
 /// - π_value: Schnorr proof that `nul_l = s_l · g` (section 3.7)
 ///
-/// Proof size: `975 + (L+1)×32` bytes where L = number of service providers.
+/// Proof size: `PROOF_BASE_SIZE + (L+1)×32` bytes where L = number of service providers.
 
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PaymentIdentityRegistrationProof {
     // ── π_membership: Bootle/Groth one-out-of-many ─────────────────────────
 
@@ -164,7 +165,7 @@ pub struct PaymentIdentityRegistrationProof {
 /// Generate a service registration proof for a multi-value commitment.
 ///
 /// - `crs`: the Common Reference String.
-/// - `anonymity_set`: the full anonymity set of size N = 1024.
+/// - `anonymity_set`: the full anonymity set of size N.
 /// - `index`: the prover's position in the set (0-based).
 /// - `service_index`: which service to register for (1-indexed).
 /// - `blinding_key`: `k` — the Pedersen blinding key.
@@ -184,7 +185,7 @@ pub fn prove_payment_identity_registration(
     name_scalar: &[u8; 32],
 ) -> Result<PaymentIdentityRegistrationProof, &'static str> {
     if anonymity_set.len() != N {
-        return Err("set must have exactly 1024 commitments");
+        return Err("set must be a power of 2 with exactly N commitments");
     }
     if index >= N {
         return Err("index out of range");
@@ -575,24 +576,24 @@ pub fn verify_payment_identity_registration_proof(
 
 // ── proof serialization ─────────────────────────────────────────────────────
 //
-// Layout (byte offsets):
-//   0..132   a, b, c, d         (4 × 33 bytes)
-// 132..462   e_poly[0..9]       (10 × 33 bytes)
-// 462..782   f[0..9]            (10 × 32 bytes)
-// 782..814   z_a                (32 bytes)
-// 814..846   z_c                (32 bytes)
-// 846..879   schnorr_r          (33 bytes)
-// 879..911   schnorr_s          (32 bytes)
-// 911..943   nullifier_scalar   (32 bytes)
-// 943..975   name_scalar        (32 bytes)
-// 975..end   z_responses        ((L+1) × 32 bytes)
-//
-// Fixed portion: 975 bytes. Total: 975 + (L+1)×32.
+// Fixed portion size = 4×33 + M×33 + M×32 + 2×32 + 33 + 3×32 = PROOF_BASE_SIZE.
+// Variable portion: (L+1) × 32 bytes (z_responses).
+// Total: PROOF_BASE_SIZE + (L+1)×32.
+
+const PROOF_BASE_SIZE: usize = 4 * 33 + M * 33 + M * 32 + 2 * 32 + 33 + 3 * 32;
+const EPOLY_START: usize = 4 * 33;                         // after a,b,c,d
+const F_START: usize = EPOLY_START + M * 33;               // after e_poly
+const ZA_START: usize = F_START + M * 32;                  // after f
+const ZC_START: usize = ZA_START + 32;
+const SCHNORR_R_START: usize = ZC_START + 32;
+const SCHNORR_S_START: usize = SCHNORR_R_START + 33;
+const NULLIFIER_SCALAR_START: usize = SCHNORR_S_START + 32;
+const NAME_SCALAR_START: usize = NULLIFIER_SCALAR_START + 32;
 
 /// Serialize a `ServiceRegistrationProof` to bytes.
 pub fn serialize_payment_identity_registration_proof(proof: &PaymentIdentityRegistrationProof) -> Vec<u8> {
     let z_len = proof.z_responses.len() * 32;
-    let mut buf = Vec::with_capacity(975 + z_len);
+    let mut buf = Vec::with_capacity(PROOF_BASE_SIZE + z_len);
 
     buf.extend_from_slice(&proof.a);
     buf.extend_from_slice(&proof.b);
@@ -621,30 +622,30 @@ pub fn serialize_payment_identity_registration_proof(proof: &PaymentIdentityRegi
 ///
 /// The variable-length `z_responses` portion must be a multiple of 32 bytes.
 pub fn deserialize_payment_identity_registration_proof(b: &[u8]) -> Result<PaymentIdentityRegistrationProof, String> {
-    if b.len() < 975 {
-        return Err(format!("proof too short: {} bytes (minimum 975)", b.len()));
+    if b.len() < PROOF_BASE_SIZE {
+        return Err(format!("proof too short: {} bytes (minimum {})", b.len(), PROOF_BASE_SIZE));
     }
-    let z_bytes = b.len() - 975;
+    let z_bytes = b.len() - PROOF_BASE_SIZE;
     if z_bytes % 32 != 0 {
         return Err(format!("z_responses portion ({z_bytes} bytes) not a multiple of 32"));
     }
 
     let mut e_poly = [[0u8; 33]; M];
     for (k, slot) in e_poly.iter_mut().enumerate() {
-        let start = 132 + k * 33;
+        let start = EPOLY_START + k * 33;
         slot.copy_from_slice(&b[start..start + 33]);
     }
 
     let mut f = [[0u8; 32]; M];
     for (k, slot) in f.iter_mut().enumerate() {
-        let start = 462 + k * 32;
+        let start = F_START + k * 32;
         slot.copy_from_slice(&b[start..start + 32]);
     }
 
     let z_count = z_bytes / 32;
     let mut z_responses = Vec::with_capacity(z_count);
     for i in 0..z_count {
-        let start = 975 + i * 32;
+        let start = PROOF_BASE_SIZE + i * 32;
         let mut z = [0u8; 32];
         z.copy_from_slice(&b[start..start + 32]);
         z_responses.push(z);
@@ -657,12 +658,12 @@ pub fn deserialize_payment_identity_registration_proof(b: &[u8]) -> Result<Payme
         d:  b[ 99..132].try_into().unwrap(),
         e_poly,
         f,
-        z_a: b[782..814].try_into().unwrap(),
-        z_c: b[814..846].try_into().unwrap(),
-        schnorr_r: b[846..879].try_into().unwrap(),
-        schnorr_s: b[879..911].try_into().unwrap(),
-        nullifier_scalar: b[911..943].try_into().unwrap(),
-        name_scalar: b[943..975].try_into().unwrap(),
+        z_a: b[ZA_START..ZC_START].try_into().unwrap(),
+        z_c: b[ZC_START..SCHNORR_R_START].try_into().unwrap(),
+        schnorr_r: b[SCHNORR_R_START..SCHNORR_S_START].try_into().unwrap(),
+        schnorr_s: b[SCHNORR_S_START..NULLIFIER_SCALAR_START].try_into().unwrap(),
+        nullifier_scalar: b[NULLIFIER_SCALAR_START..NAME_SCALAR_START].try_into().unwrap(),
+        name_scalar: b[NAME_SCALAR_START..PROOF_BASE_SIZE].try_into().unwrap(),
         z_responses,
     })
 }
@@ -674,23 +675,19 @@ mod tests {
     use super::*;
     use crate::core::request::derive_payment_request_pseudonym;
     use crate::core::credential::MasterCredential;
-    use crate::core::crs::Merchant;
+    use crate::core::merchant::Merchant;
     use crate::core::nullifier::derive_public_nullifier;
     use crate::core::types::{BlindingKey, ChildRandomness, FriendlyName, MasterSecret, Name};
 
     fn make_provider(name: &str) -> Merchant {
-        Merchant {
-            name: Name::new(name),
-            credential_generator: [0x02; 33],
-            origin: format!("https://{name}"),
-        }
+        Merchant::new(name, &format!("https://{name}"))
     }
 
     fn make_crs(n: usize) -> Crs {
-        let providers: Vec<Merchant> = (0..n)
+        let merchants: Vec<Merchant> = (0..n)
             .map(|i| make_provider(&format!("user-{i}")))
             .collect();
-        Crs::setup(providers)
+        Crs::setup(merchants, N)
     }
 
     fn make_credential(crs: &Crs, seed: u8) -> MasterCredential {
@@ -725,7 +722,7 @@ mod tests {
     #[test]
     fn prove_and_verify_service_registration() {
         let crs = make_crs(3);
-        let target_pos = 42;
+        let target_pos = 5;
         let (cred, set) = make_full_set(&crs, 0xAA, target_pos);
 
         let user_index = 2; // 1-indexed
@@ -764,7 +761,7 @@ mod tests {
     #[test]
     fn wrong_nullifier_scalar_fails() {
         let crs = make_crs(3);
-        let (cred, set) = make_full_set(&crs, 0xBB, 10);
+        let (cred, set) = make_full_set(&crs, 0xBB, 3);
 
         let user_index = 1;
         let all_nullifiers = cred.all_nullifier_scalars(&crs);
@@ -772,7 +769,7 @@ mod tests {
         let pub_nul = cred.public_nullifier(&crs, user_index);
 
         let proof = prove_payment_identity_registration(
-            &crs, &set, 10, user_index, TEST_SET_ID,
+            &crs, &set, 3, user_index, TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
             &cred.friendly_name.to_scalar_bytes(),
         )
@@ -796,7 +793,7 @@ mod tests {
     #[test]
     fn wrong_service_index_fails() {
         let crs = make_crs(3);
-        let (cred, set) = make_full_set(&crs, 0xCC, 100);
+        let (cred, set) = make_full_set(&crs, 0xCC, 4);
 
         let user_index = 1;
         let all_nullifiers = cred.all_nullifier_scalars(&crs);
@@ -804,7 +801,7 @@ mod tests {
         let pub_nul = cred.public_nullifier(&crs, user_index);
 
         let proof = prove_payment_identity_registration(
-            &crs, &set, 100, user_index, TEST_SET_ID,
+            &crs, &set, 4, user_index, TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
             &cred.friendly_name.to_scalar_bytes(),
         )
@@ -822,7 +819,7 @@ mod tests {
     #[test]
     fn tampered_proof_fails() {
         let crs = make_crs(2);
-        let (cred, set) = make_full_set(&crs, 0xDD, 500);
+        let (cred, set) = make_full_set(&crs, 0xDD, 6);
 
         let user_index = 1;
         let all_nullifiers = cred.all_nullifier_scalars(&crs);
@@ -830,7 +827,7 @@ mod tests {
         let pub_nul = cred.public_nullifier(&crs, user_index);
 
         let mut proof = prove_payment_identity_registration(
-            &crs, &set, 500, user_index, TEST_SET_ID,
+            &crs, &set, 6, user_index, TEST_SET_ID,
             &cred.k.0, &all_nullifiers, &pseudonym, &pub_nul,
             &cred.friendly_name.to_scalar_bytes(),
         )
@@ -863,13 +860,12 @@ mod tests {
         )
         .unwrap();
 
-        // π_membership fixed: 4×33 (ABCD) + 10×33 (E_poly) + 10×32 (f) + 2×32 (z_a, z_c)
-        //   = 132 + 330 + 320 + 64 = 846
-        // π_membership variable: (L+1)×32 (z_responses: g + L-1 h_{m≠l} + h_name)
-        // π_value: 33 (schnorr_r) + 32 (schnorr_s) = 65
-        // nullifier_scalar: 32, name_scalar: 32
-        // Total: 975 + (L+1)×32
-        let expected = 975 + (l_count + 1) * 32;
+        // Fixed portion: 4×33 (ABCD) + M×33 (E_poly) + M×32 (f) + 2×32 (z_a, z_c)
+        //   + 33 (schnorr_r) + 3×32 (schnorr_s, nullifier_scalar, name_scalar)
+        //   = PROOF_BASE_SIZE
+        // Variable: (L+1)×32 (z_responses: g + L-1 h_{m≠l} + h_name)
+        // Total: PROOF_BASE_SIZE + (L+1)×32
+        let expected = PROOF_BASE_SIZE + (l_count + 1) * 32;
         let actual = 4 * 33 + M * 33 + M * 32 + 2 * 32
             + proof.z_responses.len() * 32
             + 33 + 32  // schnorr_r + schnorr_s

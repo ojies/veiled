@@ -213,23 +213,19 @@ mod tests {
     use super::*;
     use crate::core::request::derive_payment_request_pseudonym;
     use crate::core::credential::MasterCredential;
-    use crate::core::crs::Merchant;
+    use crate::core::merchant::Merchant;
     use crate::core::payment_identity::prove_payment_identity_registration;
     use crate::core::types::{BlindingKey, ChildRandomness, FriendlyName, MasterSecret, Name};
 
     fn make_provider(name: &str) -> Merchant {
-        Merchant {
-            name: Name::new(name),
-            credential_generator: [0x02; 33],
-            origin: format!("https://{name}"),
-        }
+        Merchant::new(name, &format!("https://{name}"))
     }
 
     fn make_crs(n: usize) -> Crs {
-        let providers: Vec<Merchant> = (0..n)
+        let merchants: Vec<Merchant> = (0..n)
             .map(|i| make_provider(&format!("user-{i}")))
             .collect();
-        Crs::setup(providers)
+        Crs::setup(merchants, N)
     }
 
     fn make_credential(crs: &Crs, seed: u8) -> MasterCredential {
@@ -240,7 +236,7 @@ mod tests {
         MasterCredential::create(crs, sk, r, k, name)
     }
 
-    const N: usize = 1024;
+    use crate::core::utils::N;
     const TEST_SET_ID: u64 = 7;
 
     fn make_full_set(crs: &Crs, target_seed: u8, target_pos: usize) -> (MasterCredential, Vec<Commitment>) {
@@ -359,7 +355,7 @@ mod tests {
     fn verify_and_register_full_flow() {
         let crs = make_crs(3);
         let service_index = 2; // Bob is user 2
-        let target_pos = 42;
+        let target_pos = 5;
 
         let (cred, set) = make_full_set(&crs, 0xAA, target_pos);
         let (proof, pseudonym, pub_nul, fname) =
@@ -386,7 +382,7 @@ mod tests {
     fn verify_and_register_rejects_replay() {
         let crs = make_crs(3);
         let service_index = 2;
-        let target_pos = 42;
+        let target_pos = 5;
 
         let (cred, set) = make_full_set(&crs, 0xAA, target_pos);
         let (proof, pseudonym, pub_nul, fname) =
@@ -411,9 +407,9 @@ mod tests {
     fn verify_and_register_set_not_found() {
         let crs = make_crs(3);
         let service_index = 1;
-        let (cred, set) = make_full_set(&crs, 0xBB, 10);
+        let (cred, set) = make_full_set(&crs, 0xBB, 3);
         let (proof, pseudonym, pub_nul, fname) =
-            make_valid_proof(&crs, &cred, &set, 10, service_index, 99);
+            make_valid_proof(&crs, &cred, &set, 3, service_index, 99);
 
         let mut vs = VerifierState::new(service_index);
         // Do NOT cache set 99.
@@ -430,7 +426,7 @@ mod tests {
     fn verify_and_register_invalid_proof() {
         let crs = make_crs(3);
         let service_index = 1;
-        let target_pos = 10;
+        let target_pos = 3;
 
         let (cred, set) = make_full_set(&crs, 0xCC, target_pos);
         let (mut proof, pseudonym, pub_nul, fname) =
@@ -453,7 +449,7 @@ mod tests {
     #[test]
     fn verify_and_register_wrong_user() {
         let crs = make_crs(3);
-        let target_pos = 50;
+        let target_pos = 6;
 
         let (cred, set) = make_full_set(&crs, 0xDD, target_pos);
         // Proof generated for user 2.
@@ -476,7 +472,7 @@ mod tests {
     fn verify_and_register_wrong_name() {
         let crs = make_crs(3);
         let service_index = 1;
-        let target_pos = 10;
+        let target_pos = 3;
 
         let (cred, set) = make_full_set(&crs, 0xEE, target_pos);
         let (proof, pseudonym, pub_nul, _fname) =
