@@ -2,7 +2,7 @@
 
 ```
 veiled/
-├── Cargo.toml                           # single package with lib + 4 binaries
+├── Cargo.toml                           # single package with lib + 5 binaries
 ├── build.rs                             # protobuf compilation (tonic-build)
 ├── proto/
 │   ├── registry.proto                   # Registry gRPC service definition
@@ -31,6 +31,7 @@ veiled/
 │   └── bin/
 │       ├── registry_grpc.rs            # Registry server entry point
 │       ├── beneficiary.rs              # Beneficiary CLI (Phases 1-5)
+│       ├── veiled_helper.rs           # JSON helper for web UI crypto ops
 │       └── merchant/
 │           ├── main.rs                 # Merchant server entry point
 │           └── service.rs              # MerchantGrpcService handlers
@@ -45,6 +46,19 @@ veiled/
 │   └── images/
 │       ├── banner.svg                  # Project banner
 │       └── logo.svg                    # Project logo
+├── scripts/
+│   └── dev.sh                          # Launch all services + UI for development
+├── ui/                                  # Next.js web UI (React + TypeScript)
+│   ├── app/
+│   │   ├── page.tsx                    # Landing page — role selector
+│   │   ├── beneficiary/page.tsx       # Beneficiary flow (Phases 1-5)
+│   │   ├── merchant/page.tsx          # Merchant dashboard (Phases 4-5)
+│   │   └── api/                        # API routes (gRPC + helper bridge)
+│   └── lib/
+│       ├── grpc.ts                     # gRPC client (@grpc/grpc-js)
+│       ├── helper.ts                   # veiled-helper CLI wrapper
+│       ├── state.ts                    # In-memory simulation state
+│       └── types.ts                    # TypeScript interfaces
 └── tests/
     └── registry_grpc_test.rs           # gRPC integration tests
 ```

@@ -134,6 +134,16 @@ derived from the pseudonym.
 ## Architecture
 
 ```
+┌─ Next.js Web UI (ui/) ──────────────────────────────────────────────┐
+│                                                                     │
+│  Landing page: "I am a Beneficiary" / "I am a Merchant"             │
+│  /beneficiary  — credential → register → payment ID → payment      │
+│  /merchant     — dashboard with incoming registrations & payments   │
+│                                                                     │
+│  API routes call gRPC servers + veiled-helper (Rust CLI for crypto) │
+└───────────────────┬─────────────────────────────────────────────────┘
+                    │ gRPC + child_process
+                    ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Registry gRPC Server (veiled-registry-grpc)                        │
 │                                                                     │
@@ -239,6 +249,21 @@ Demonstrates: credential creation, registration, set finalization, ZK proof
 generation/verification, Schnorr authentication, P2TR address derivation,
 and cross-merchant pseudonym unlinkability.
 
+### Run the interactive web UI
+
+A Next.js app where you choose to act as a **Beneficiary** or **Merchant**
+and step through the protocol interactively:
+
+```bash
+./scripts/dev.sh
+# Open http://localhost:3000
+```
+
+Starts the registry, 3 merchant servers, and the Next.js frontend. As a
+beneficiary you create credentials, register payment identities, and request
+payments. As a merchant you see incoming registrations and payment requests
+with their ZK proof verification status.
+
 ---
 
 ## Testing
@@ -275,6 +300,9 @@ Test coverage:
 - [x] P2TR address derivation from pseudonyms (Phase 5)
 - [x] gRPC services for registry and merchant
 - [x] Beneficiary CLI with full Phase 1-5 flow
+- [x] Interactive web UI (Next.js) with role-based Beneficiary/Merchant flows
+- [x] `veiled-helper` CLI bridge for Rust crypto operations from the web UI
+- [x] Full protocol simulation (`demo`) with 3 merchants and 8 beneficiaries
 
 ### Phase 3-4 improvements (Payment Identity Registration)
 - [ ] Per-merchant nullifier duplicate rejection in the merchant service (currently verified in core but not enforced at the gRPC layer)

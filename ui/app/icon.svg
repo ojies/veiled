@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="btc-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F5A623"/>
+      <stop offset="100%" stop-color="#D4800A"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="64" fill="#0c0c0c"/>
+
+  <!-- Concentric broken rings -->
+  <g transform="translate(256, 256)" fill="none" stroke-linecap="round">
+    <path d="M 0,-210 A 210,210 0 0,1 210,0" stroke="#ffffff" stroke-width="5" opacity="0.3"/>
+    <path d="M -148.5,-148.5 A 210,210 0 0,0 -210,0" stroke="#ffffff" stroke-width="5" opacity="0.2"/>
+    <path d="M 170,0 A 170,170 0 0,1 -85,147.2" stroke="#ffffff" stroke-width="5" opacity="0.35"/>
+    <path d="M -170,0 A 170,170 0 0,1 0,-170" stroke="#ffffff" stroke-width="5" opacity="0.25"/>
+    <path d="M 0,130 A 130,130 0 0,1 -130,0" stroke="#ffffff" stroke-width="5.5" opacity="0.4"/>
+    <path d="M 91.9,-91.9 A 130,130 0 0,1 130,0" stroke="#ffffff" stroke-width="5.5" opacity="0.3"/>
+    <path d="M -92,0 A 92,92 0 0,1 92,0" stroke="#ffffff" stroke-width="5.5" opacity="0.45"/>
+  </g>
+
+  <!-- Bitcoin symbol -->
+  <g transform="translate(256, 256)">
+    <rect x="-16" y="-52" width="5.5" height="104" rx="2.75" fill="url(#btc-grad)"/>
+    <rect x="10.5" y="-52" width="5.5" height="104" rx="2.75" fill="url(#btc-grad)"/>
+    <path d="M -28,-38 L 12,-38 C 30,-38 40,-30 40,-20 C 40,-10 30,-3 12,-3 L -28,-3 Z" fill="url(#btc-grad)"/>
+    <path d="M -28,-6 L 16,-6 C 36,-6 47,3 47,15 C 47,27 36,36 16,36 L -28,36 Z" fill="url(#btc-grad)"/>
+    <path d="M -18,-28 L 10,-28 C 20,-28 26,-24 26,-20 C 26,-16 20,-13 10,-13 L -18,-13 Z" fill="#0c0c0c"/>
+    <path d="M -18,4 L 14,4 C 26,4 33,9 33,15 C 33,21 26,26 14,26 L -18,26 Z" fill="#0c0c0c"/>
+  </g>
+</svg>

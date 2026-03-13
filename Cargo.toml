@@ -23,6 +23,10 @@ path = "src/bin/merchant/main.rs"
 name = "demo"
 path = "demo/simulate.rs"
 
+[[bin]]
+name = "veiled-helper"
+path = "src/bin/veiled_helper.rs"
+
 [dependencies]
 # Core
 sha2 = "0.10"
