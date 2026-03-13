@@ -2,8 +2,9 @@
 
 ```
 veiled/
-├── Cargo.toml                           # single package with lib + 5 binaries
+├── Cargo.toml                           # single package with lib + 6 binaries
 ├── build.rs                             # protobuf compilation (tonic-build)
+├── .dockerignore                        # excludes target/, .wallets/, node_modules/
 ├── proto/
 │   ├── registry.proto                   # Registry gRPC service definition
 │   └── merchant.proto                   # Merchant gRPC service definition
@@ -32,33 +33,61 @@ veiled/
 │       ├── registry_grpc.rs            # Registry server entry point
 │       ├── beneficiary.rs              # Beneficiary CLI (Phases 1-5)
 │       ├── veiled_helper.rs           # JSON helper for web UI crypto ops
+│       ├── veiled_wallet.rs           # BDK wallet binary (BIP86 P2TR, 7 commands)
 │       └── merchant/
 │           ├── main.rs                 # Merchant server entry point
 │           └── service.rs              # MerchantGrpcService handlers
 ├── demo/
-│   └── simulate.rs                      # Full protocol simulation (3 merchants, 8 beneficiaries)
+│   └── simulate.rs                     # Full protocol simulation (3 merchants, 8 beneficiaries)
+├── docker/
+│   └── Dockerfile                      # Multi-stage: rust-builder → registry | ui targets
+├── docker-compose.yml                  # Full stack: bitcoind, explorer, registry, chain-init, ui
+├── .github/
+│   └── workflows/
+│       └── ci.yml                      # Rust check/clippy/test + UI tsc/build + Docker build
 ├── docs/
-│   ├── SCENARIO.md                     # End-to-end walkthrough
-│   ├── API.md                          # gRPC API reference
-│   ├── CRYPTOGRAPHY.md                 # Cryptographic primitives + terminology
-│   ├── LAYOUT.md                       # This file
-│   ├── annomymous-credential.pdf       # ASC paper
+│   ├── PROTOCOL.md                    # Protocol overview (6 phases, security properties)
+│   ├── SCENARIO.md                    # End-to-end walkthrough (Alice, CoffeeCo, BookStore)
+│   ├── API.md                         # gRPC + REST API + CLI reference
+│   ├── CRYPTOGRAPHY.md                # Cryptographic primitives, Bootle/Groth proof, terminology
+│   ├── LAYOUT.md                      # This file
+│   ├── annomymous-credential.pdf      # ASC paper by Alupotha et al.
 │   └── images/
-│       ├── banner.svg                  # Project banner
-│       └── logo.svg                    # Project logo
+│       ├── banner.svg                 # Project banner
+│       └── logo.svg                   # Project logo
 ├── scripts/
-│   └── dev.sh                          # Launch all services + UI for development
-├── ui/                                  # Next.js web UI (React + TypeScript)
+│   ├── dev.sh                         # Launch via Docker Compose
+│   ├── docker-registry-entrypoint.sh  # Registry container: wait for bitcoind, create wallet, start
+│   ├── docker-ui-entrypoint.sh        # UI container: wait for registry, start Next.js
+│   └── docker-init-chain.sh           # Init container: create miner wallet, mine blocks, fund registry
+├── ui/                                 # Next.js web UI (React + TypeScript)
 │   ├── app/
-│   │   ├── page.tsx                    # Landing page — role selector
-│   │   ├── beneficiary/page.tsx       # Beneficiary flow (Phases 1-5)
-│   │   ├── merchant/page.tsx          # Merchant dashboard (Phases 4-5)
-│   │   └── api/                        # API routes (gRPC + helper bridge)
+│   │   ├── page.tsx                   # Landing page — role selector + protocol overview
+│   │   ├── demo/page.tsx             # Demo controls — launch, fund wallets, reset
+│   │   ├── beneficiary/page.tsx      # Beneficiary flow (credential → register → receive payment)
+│   │   ├── merchant/page.tsx         # Merchant dashboard (registrations + send payments)
+│   │   └── api/                       # API routes
+│   │       ├── setup/init/            # Lazy set creation from registered merchants
+│   │       ├── wallet/                # create, balance, send, faucet, tx
+│   │       ├── beneficiary/           # credential, register, finalize, payment-id, payment, incoming
+│   │       ├── merchant/              # create, identities, payments
+│   │       ├── state/                 # Get simulation state
+│   │       └── reset/                 # Reset all state
+│   ├── components/                    # Reusable UI components
+│   │   ├── Stepper.tsx               # Horizontal progress stepper
+│   │   ├── PhaseCard.tsx             # Collapsible section wrapper
+│   │   ├── WalletCard.tsx            # Balance display + send/receive
+│   │   ├── HexDisplay.tsx            # Truncated hex with copy button
+│   │   ├── Toast.tsx                 # Notification toast
+│   │   ├── ToastProvider.tsx         # Toast context provider
+│   │   └── FaucetButton.tsx          # Fund all wallets via regtest mining
 │   └── lib/
-│       ├── grpc.ts                     # gRPC client (@grpc/grpc-js)
-│       ├── helper.ts                   # veiled-helper CLI wrapper
-│       ├── state.ts                    # In-memory simulation state
-│       └── types.ts                    # TypeScript interfaces
+│       ├── grpc.ts                    # gRPC client (@grpc/grpc-js)
+│       ├── helper.ts                  # veiled-helper CLI wrapper
+│       ├── wallet.ts                  # veiled-wallet CLI wrapper
+│       ├── state.ts                   # In-memory simulation state
+│       ├── types.ts                   # TypeScript interfaces
+│       └── useLocalState.ts           # localStorage persistence hook
 └── tests/
-    └── registry_grpc_test.rs           # gRPC integration tests
+    └── registry_grpc_test.rs          # gRPC integration tests
 ```

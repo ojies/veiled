@@ -51,8 +51,8 @@ Merchants are created dynamically through the UI — no pre-started merchants.
 Every participant gets a BIP86 P2TR wallet backed by bitcoind:
 
 - **Registry** — wallet created by `dev.sh` on startup, collects registration fees
-- **Merchants** — wallet created when registering through the UI, pays 5,000 sats registration fee
-- **Beneficiaries** — wallet auto-created with credential, pays 10,000 sats registration fee
+- **Merchants** — wallet created when registering through the UI, pays 5,000 sats registration fee, sends payments to beneficiaries
+- **Beneficiaries** — wallet auto-created with credential, pays 10,000 sats registration fee, receives payments from merchants
 
 The **faucet** button mines regtest blocks to fund wallets instantly.
 
@@ -71,15 +71,28 @@ The **faucet** button mines regtest blocks to fund wallets instantly.
 | `/api/beneficiary/register` | POST | Register with anonymity set |
 | `/api/beneficiary/finalize` | POST | Finalize set with real UTXO |
 | `/api/beneficiary/payment-id` | POST | Register payment identity (ZK proof) |
-| `/api/beneficiary/payment` | POST | Request payment (Schnorr proof) |
-| `/api/beneficiary/incoming` | GET | Check incoming payments |
+| `/api/beneficiary/payment` | POST | Request payment from merchant (Schnorr proof) |
+| `/api/beneficiary/incoming` | GET | Check incoming payments to beneficiary |
 | `/api/beneficiary/merchants` | GET | List registered merchants |
-| `/api/merchant/identities` | GET | Registered beneficiaries |
-| `/api/merchant/payments` | GET | Payment history |
+| `/api/merchant/identities` | GET | Registered beneficiaries at merchant |
+| `/api/merchant/payments` | GET | Payment requests sent by merchant |
 | `/api/state` | GET | Current simulation state |
 | `/api/reset` | POST | Reset all state |
 
-## Development
+## Docker Deployment
+
+The UI runs as a standalone Next.js container in Docker Compose. From the
+project root:
+
+```bash
+docker compose up --build
+```
+
+The UI container bundles all Rust binaries (`veiled-helper`, `veiled-wallet`,
+`merchant`) and spawns them as child processes. Configuration is via
+environment variables — see `docker-compose.yml` for the full list.
+
+## Local Development
 
 ```bash
 cd ui
@@ -92,7 +105,17 @@ The UI expects:
 - `bitcoind` at `localhost:18443` (user: `veiled`, pass: `veiled`)
 - Rust binaries built in `../target/release/`
 
-Environment variables:
-- `BITCOIN_RPC_URL` (default: `http://localhost:18443`)
-- `BITCOIN_RPC_USER` (default: `veiled`)
-- `BITCOIN_RPC_PASS` (default: `veiled`)
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BITCOIN_RPC_URL` | `http://localhost:18443` | bitcoind RPC endpoint |
+| `BITCOIN_RPC_USER` | `veiled` | bitcoind RPC username |
+| `BITCOIN_RPC_PASS` | `veiled` | bitcoind RPC password |
+| `REGISTRY_ADDRESS` | `[::1]:50051` | Registry gRPC address |
+| `REGISTRY_SERVER` | `http://[::1]:50051` | Registry gRPC URL (for merchant binary) |
+| `WALLET_BIN` | `../target/release/veiled-wallet` | Path to wallet binary |
+| `HELPER_BIN` | `../target/release/veiled-helper` | Path to helper binary |
+| `MERCHANT_BIN` | `../target/release/merchant` | Path to merchant binary |
+| `WALLETS_DIR` | `../.wallets` | Directory for wallet state files |
+| `PROTO_DIR` | `../proto` | Directory containing .proto files |

@@ -5,6 +5,9 @@ beneficiary creates a master credential, registers with a registry backed by
 Bitcoin, and establishes pseudonymous payment identities with merchants — all
 while maintaining zero-knowledge membership privacy.
 
+For the protocol specification, see [PROTOCOL.md](PROTOCOL.md). For
+cryptographic details, see [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md).
+
 ---
 
 ## Cast
@@ -311,7 +314,7 @@ CoffeeCo:
 1. Verifies the Schnorr proof: checks `s·g == R + e·ϕ_1`
 2. Looks up `ϕ_1` in `registered_identities` → finds "alice"
 3. Derives a P2TR (Pay-to-Taproot) Bitcoin address from the pseudonym
-4. Returns:
+4. Sends 5000 sats to Alice's P2TR address and returns:
 
 ```
 PaymentRequestResponse {
@@ -320,7 +323,7 @@ PaymentRequestResponse {
 }
 ```
 
-Alice can now receive 5000 sats at this address. The address is derived
+Alice receives the payment at her P2TR address. The address is derived
 deterministically from her pseudonym, so it's consistent across requests
 to the same merchant.
 
@@ -404,7 +407,7 @@ Phase 1:  Alice generates (sk, r, k) → computes Φ locally
 Phase 2:  Alice registers Φ → subscribes to stream → set finalized → VTxO tree
 Phase 3:  Alice derives (ϕ_1, nul_1) → generates ZK proof → submits to CoffeeCo
 Phase 4:  CoffeeCo verifies proof → stores identity → ready for payments
-Phase 5:  Alice creates Schnorr proof → CoffeeCo returns P2TR address
+Phase 5:  Alice creates Schnorr proof → CoffeeCo sends payment to P2TR address
 ```
 
 After Phase 3, Alice can authenticate to CoffeeCo indefinitely using
@@ -414,6 +417,8 @@ registry is required.
 ---
 
 ## Running the Demo
+
+### CLI demo
 
 To see all phases in action with 3 merchants (CoffeeCo, BookStore, TechMart)
 and 8 beneficiaries (Alice through Heidi):
@@ -425,3 +430,17 @@ cargo run --bin demo --release
 The demo starts an in-process registry and merchant servers, runs all 8
 beneficiaries through Phases 1-5, and demonstrates cross-merchant pseudonym
 unlinkability with Alice registered at all three merchants.
+
+### Interactive web UI (Docker)
+
+The full stack — bitcoind, block explorer, registry, and web UI — runs via
+Docker Compose:
+
+```bash
+docker compose up --build
+# Open http://localhost:3000
+```
+
+Create merchants through the UI, then step through the beneficiary flow
+interactively with real Bitcoin regtest transactions. See the root
+[README.md](../README.md) for details.

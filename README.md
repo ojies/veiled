@@ -30,150 +30,54 @@ receives Bitcoin payments to a P2TR address derived from their pseudonym.
 
 ---
 
-## Protocol overview
+## How it works
 
-The protocol has six phases:
+The protocol has six phases — see [PROTOCOL.md](docs/PROTOCOL.md) for the
+full specification:
 
-### Phase 0 — System Setup (CRS)
-
-Merchants register with the registry. An admin creates an anonymity set,
-which triggers CRS generation from the registered merchants:
-
-```
-crs = (G, q, g, h_1..h_L, v_1..v_L, G_auth_1..G_auth_L)
-```
-
-- **G** = secp256k1, **q** = curve order
-- **g** = HashToCurve("CRS-ASC-generator-0") — base generator (NUMS)
-- **h_l** = HashToCurve("CRS-ASC-generator-{l}") for l = 1..L — per-merchant generators
-- **h_name** = HashToCurve("CRS-ASC-generator-name") — name commitment generator
-- **v_l** = merchant name (string identifier, used as HKDF salt)
-- **G_auth_l** = HashToCurve(merchant_name) — credential generator for merchant l
-
-All generators are derived via hash-to-curve with DST `"CRS-ASC-v1"`, ensuring
-they are provably independent (NUMS — Nothing Up My Sleeve).
-
-### Phase 1 — Credential Creation (local, offline)
-
-The beneficiary generates three secrets locally and computes a master identity:
-
-```
-sk ←$ {0,1}^256     # root secret for nullifier derivation (MasterSecret)
-r  ←$ {0,1}^256     # child credential randomness (ChildRandomness)
-k  ←$ Z_q           # Pedersen blinding key (BlindingKey)
-
-for l = 1..L:
-  s_l = HKDF(sk, salt=v_l, info="CRS-ASC-nullifier")
-
-name_scalar = SHA256(friendly_name)
-
-Φ = k·g + s_1·h_1 + ... + s_L·h_L + name_scalar·h_name
-
-Master credential = (Φ, sk, r, k)
-```
-
-### Phase 2 — Registration + Anonymity Set Finalization
-
-The beneficiary registers their commitment Φ with the registry via gRPC, then
-subscribes to a server-streaming RPC to wait for the anonymity set to finalize:
-
-```
-RegisterBeneficiary(set_id, Φ, name)  →  index
-SubscribeSetFinalization(set_id)      →  stream(anonymity_set)
-GetVtxoTree(set_id)                   →  (root_tx, fanout_tx)
-```
-
-Once the set is finalized, the beneficiary downloads the frozen anonymity set
-and VTxO tree. The sealed set is anchored on Bitcoin via a vtxo-tree — a
-binary tree of pre-signed transactions where the root UTXO commits to all
-leaf outputs. Each leaf is a P2TR output locked to one beneficiary's Φ.
-
-### Phase 3 — Payment Identity Registration
-
-The beneficiary derives a per-merchant child credential and proves membership:
-
-```
-csk_l = HKDF(r, salt=merchant_name, info="CRS-ASC-child-secret-key")
-ϕ_l   = csk_l · g              # pseudonym (unlinkable across merchants)
-nul_l = s_l · g                 # public nullifier (Sybil resistance)
-```
-
-A composite zero-knowledge proof demonstrates:
-1. **Membership**: "I know the opening of one of the commitments in the
-   anonymity set" (adapted Bootle/Groth on shifted commitments)
-2. **Nullifier authenticity**: "nul_l = s_l · g is correctly derived from
-   my committed identity" (Schnorr proof)
-
-The beneficiary submits `(ϕ_l, nul_l, proof, friendly_name)` to the merchant
-via `SubmitPaymentRegistration`.
-
-### Phase 4 — Merchant Verification
-
-The merchant verifies the ZK proof against the CRS and anonymity set,
-checks the nullifier for duplicates (Sybil resistance), and stores the
-mapping `pseudonym → (friendly_name, nullifier, set_id)`.
-
-### Phase 5 — Payment Request
-
-The beneficiary authenticates via a non-interactive Schnorr proof of child
-credential knowledge:
-
-```
-t ←$ Z_q,  R = t · g
-e = H("CRS-ASC-schnorr-child-auth" || g || ϕ || R)
-s = t + e · csk_l
-Proof = (R, s)
-```
-
-Submitted via `SubmitPaymentRequest(amount, pseudonym, proof)`. The merchant
-verifies the proof, looks up the pseudonym, and returns a P2TR Bitcoin address
-derived from the pseudonym.
+1. **System Setup** — Merchants register with a registry; a Common Reference
+   String (CRS) is generated from NUMS hash-to-curve generators on secp256k1
+2. **Credential Creation** — Beneficiary generates secrets locally, computes a
+   multi-value Pedersen commitment Φ packing per-merchant nullifiers
+3. **Registration** — Φ is registered in an anonymity set, which is sealed and
+   anchored on Bitcoin via a VTxO tree of P2TR outputs
+4. **Payment Identity** — Beneficiary derives an unlinkable pseudonym per
+   merchant and proves set membership via a Bootle/Groth ZK proof
+5. **Merchant Verification** — Merchant verifies the proof, checks nullifier
+   freshness for Sybil resistance, stores the pseudonymous identity
+6. **Payment Request** — Beneficiary authenticates via lightweight Schnorr
+   proof and provides a P2TR address; merchant sends Bitcoin payment to it
 
 ---
 
 ## Architecture
 
 ```
-┌─ Next.js Web UI (ui/) ──────────────────────────────────────────────┐
-│                                                                     │
-│  Landing page: "I am a Beneficiary" / "I am a Merchant"             │
-│  /beneficiary  — credential → register → payment ID → payment      │
-│  /merchant     — dashboard with incoming registrations & payments   │
-│                                                                     │
-│  API routes call gRPC servers + veiled-helper (Rust CLI for crypto) │
-└───────────────────┬─────────────────────────────────────────────────┘
-                    │ gRPC + child_process
-                    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Registry gRPC Server (veiled-registry-grpc)                        │
-│                                                                     │
-│  RegistryStore (in-memory)                                          │
-│  ├── merchant_pool: HashMap<String, MerchantInfo>                   │
-│  └── active_sets: HashMap<u64, ActiveSet>                           │
-│       ├── registry: Registry (CRS + anonymity set)                  │
-│       ├── tree: Option<IdentityTree> (VTxO tree after finalization) │
-│       └── finalization_tx: watch::Sender<bool> (notification)       │
-│                                                                     │
-│  gRPC RPCs:                                                         │
-│  ├── RegisterMerchant, CreateSet, RegisterBeneficiary, FinalizeSet  │
-│  ├── GetMerchants, GetCrs, GetAnonymitySet, GetVtxoTree             │
-│  └── SubscribeSetFinalization (server-streaming)                    │
-└───────────────────┬────────────────────────┬────────────────────────┘
-                    │ gRPC                   │ gRPC
-                    ▼                        ▼
-┌──────────────────────────────┐  ┌───────────────────────────────────┐
-│  Merchant gRPC Server        │  │  Beneficiary CLI                  │
-│                              │  │                                   │
-│  MerchantGrpcService         │  │  1. Fetch CRS from registry       │
-│  ├── merchant: Merchant      │  │  2. Create credential locally     │
-│  ├── crs: Crs                │  │  3. Register Φ with registry      │
-│  └── anonymity_set           │  │  4. Subscribe to finalization     │
-│                              │  │  5. Fetch VTxO tree               │
-│  gRPC RPCs:                  │  │  6. Register payment identity     │
-│  ├── SubmitPaymentRegistration│  │     with merchant (Phase 3-4)    │
-│  └── SubmitPaymentRequest    │  │  7. Submit payment request        │
-│                              │  │     to merchant (Phase 5)         │
-└──────────────────────────────┘  └───────────────────────────────────┘
+┌── Docker Compose ──────────────────────────────────────────────────────┐
+│                                                                        │
+│  ┌─ Next.js Web UI (:3000) ──────────────────────────────────────────┐ │
+│  │  Landing: "I am a Beneficiary" / "I am a Merchant"                │ │
+│  │  API routes → gRPC + veiled-helper + veiled-wallet                │ │
+│  └────────────┬──────────────┬──────────────┬────────────────────────┘ │
+│               │ gRPC         │ child_process │ child_process           │
+│               ▼              ▼               ▼                         │
+│  ┌─────────────────┐  ┌───────────┐  ┌──────────────┐                 │
+│  │ Registry gRPC   │  │ veiled-   │  │ veiled-      │                 │
+│  │ :50051          │  │ helper    │  │ wallet       │                 │
+│  │                 │  │ (crypto)  │  │ (BDK/BIP86)  │                 │
+│  │ Merchant pool   │  └───────────┘  └──────┬───────┘                 │
+│  │ Anonymity sets  │                        │ RPC                     │
+│  │ CRS + VTxO tree │                        ▼                         │
+│  └────────┬────────┘             ┌──────────────────┐                 │
+│           │ gRPC                 │ bitcoind          │                 │
+│           ▼                      │ (regtest :18443)  │                 │
+│  ┌──────────────────┐            └──────────────────┘                 │
+│  │ Merchant gRPC    │            ┌──────────────────┐                 │
+│  │ (spawned per     │            │ Block Explorer    │                 │
+│  │  merchant)       │            │ (:3002)           │                 │
+│  └──────────────────┘            └──────────────────┘                 │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -182,26 +86,52 @@ derived from the pseudonym.
 
 | Document | Description |
 |----------|-------------|
-| [SCENARIO.md](docs/SCENARIO.md) | End-to-end walkthrough (Alice, CoffeeCo, BookStore, TechMart) |
-| [API.md](docs/API.md) | gRPC API reference (Registry + Merchant services) |
-| [CRYPTOGRAPHY.md](docs/CRYPTOGRAPHY.md) | Cryptographic primitives and terminology |
+| [PROTOCOL.md](docs/PROTOCOL.md) | Protocol specification (6 phases, security properties, unlinkability) |
+| [SCENARIO.md](docs/SCENARIO.md) | End-to-end walkthrough (Alice, CoffeeCo, BookStore) |
+| [CRYPTOGRAPHY.md](docs/CRYPTOGRAPHY.md) | Cryptographic primitives, Bootle/Groth proof structure, terminology |
+| [API.md](docs/API.md) | gRPC + REST API + wallet CLI reference |
 | [LAYOUT.md](docs/LAYOUT.md) | Project directory structure |
 | [ASC paper](docs/annomymous-credential.pdf) | Original protocol by Alupotha et al. |
 
 ---
 
-## Running
+## Quick start (Docker Compose)
 
-### Start the registry
+The easiest way to run the full stack — bitcoind, block explorer, registry,
+and web UI — all in containers:
+
+```bash
+docker compose up --build
+```
+
+Services:
+
+| Service | Port | Description |
+|---------|------|-------------|
+| Web UI | [localhost:3000](http://localhost:3000) | Interactive beneficiary/merchant flows |
+| Block Explorer | [localhost:3002](http://localhost:3002) | Bitcoin regtest block explorer |
+| Registry gRPC | localhost:50051 | Registry server |
+| bitcoind | localhost:18443 | Bitcoin Core regtest node |
+
+A chain-init container automatically creates a miner wallet, mines initial
+blocks, and funds the registry. Merchants are created dynamically through
+the UI.
+
+Works with Docker or Podman (images use `docker.io/` prefix).
+
+### Running natively
+
+<details>
+<summary>Without Docker — requires Rust, Node.js, and bitcoind in PATH</summary>
+
+#### Start the registry
 
 ```bash
 cargo run --bin veiled-registry-grpc
 # INFO: Veiled gRPC Registry listening on [::1]:50051
 ```
 
-Options: `--listen <addr>` (default: `[::1]:50051`)
-
-### Start a merchant
+#### Start a merchant
 
 ```bash
 cargo run --bin merchant -- \
@@ -211,21 +141,9 @@ cargo run --bin merchant -- \
   --listen "[::1]:50061"
 ```
 
-The merchant registers with the registry, fetches the CRS, and subscribes
-to set finalization. Once finalized, it starts accepting beneficiary
-connections.
-
-### Run a beneficiary
+#### Run a beneficiary
 
 ```bash
-# Register credential and payment identity (Phases 1-4)
-cargo run --bin beneficiary -- \
-  --name "alice" \
-  --set-id 1 \
-  --merchant-server "http://[::1]:50061" \
-  --merchant-id 1
-
-# Full flow including payment request (Phases 1-5)
 cargo run --bin beneficiary -- \
   --name "alice" \
   --set-id 1 \
@@ -234,35 +152,22 @@ cargo run --bin beneficiary -- \
   --payment-amount 5000
 ```
 
-Options: `--merchant-name <name>` overrides registry lookup for merchant name.
+#### Run the demo
 
-### Run the demo
-
-A self-contained simulation that starts an in-process registry, 3 merchant
-servers, and runs 8 beneficiaries through the full Phase 0-5 protocol:
+Self-contained simulation with 3 merchants and 8 beneficiaries:
 
 ```bash
 cargo run --bin demo --release
 ```
 
-Demonstrates: credential creation, registration, set finalization, ZK proof
-generation/verification, Schnorr authentication, P2TR address derivation,
-and cross-merchant pseudonym unlinkability.
-
-### Run the interactive web UI
-
-A Next.js app where you choose to act as a **Beneficiary** or **Merchant**
-and step through the protocol interactively:
+#### Run the web UI
 
 ```bash
 ./scripts/dev.sh
 # Open http://localhost:3000
 ```
 
-Starts the registry, 3 merchant servers, and the Next.js frontend. As a
-beneficiary you create credentials, register payment identities, and request
-payments. As a merchant you see incoming registrations and payment requests
-with their ZK proof verification status.
+</details>
 
 ---
 

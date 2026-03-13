@@ -32,11 +32,14 @@ export default function RootLayout({
       >
         <nav
           style={{
-            borderBottom: "1px solid #333",
-            padding: "0.75rem 1rem",
+            borderBottom: "1px solid #222",
+            padding: "0.75rem 1.5rem",
             display: "flex",
             alignItems: "center",
             gap: "0.75rem",
+            position: "sticky",
+            top: 0,
+            zIndex: 50,
           }}
         >
           <a
@@ -58,17 +61,27 @@ export default function RootLayout({
             Verified Payments, Veiled Identities
           </span>
         </nav>
-        <main style={{ padding: "1rem", maxWidth: "1100px", margin: "0 auto", flex: 1 }}>
+        {/* Subtle global background animation */}
+        <div className="app-bg">
+          <div className="grid-overlay" />
+          <div
+            className="glow-orb"
+            style={{ opacity: 0.3 }}
+          />
+        </div>
+        <main style={{ padding: "1rem 1.5rem", maxWidth: "1400px", width: "100%", margin: "0 auto", flex: 1, position: "relative", zIndex: 1 }}>
           <ToastProvider>{children}</ToastProvider>
         </main>
         <footer
           style={{
-            borderTop: "1px solid #222",
-            padding: "1.5rem 1rem",
+            borderTop: "1px solid #1a1a1a",
+            padding: "2rem 1rem",
             textAlign: "center",
-            color: "#555",
+            color: "#444",
             fontSize: "0.8rem",
             lineHeight: 1.8,
+            position: "relative",
+            zIndex: 1,
           }}
         >
           <div style={{ marginBottom: "0.5rem" }}>
@@ -76,15 +89,15 @@ export default function RootLayout({
               <img
                 src="/logo-nav.svg"
                 alt="Veiled"
-                style={{ height: "24px", width: "auto", opacity: 0.5, display: "inline-block" }}
+                style={{ height: "24px", width: "auto", opacity: 0.4, display: "inline-block" }}
               />
             </a>
           </div>
           <div>
             Anonymous Self-Credentials on Bitcoin &middot; ZK Proofs &middot; P2TR Payments
           </div>
-          <div style={{ marginTop: "0.25rem" }}>
-            Built with secp256k1 &middot; Bootle/Groth one-out-of-many proofs &middot; Schnorr authentication
+          <div style={{ marginTop: "0.25rem", color: "#333" }}>
+            secp256k1 &middot; Bootle/Groth one-out-of-many proofs &middot; Schnorr authentication
           </div>
         </footer>
       </body>

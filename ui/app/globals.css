@@ -4,9 +4,12 @@
   --background: #0a0a0a;
   --foreground: #ededed;
   --accent: #f5a623;
+  --accent-dim: rgba(245, 166, 35, 0.15);
   --card: #1a1a1a;
   --border: #333333;
   --muted: #666666;
+  --success: #4ade80;
+  --glow: 0 0 20px rgba(245, 166, 35, 0.15);
 }
 
 @theme inline {
@@ -16,6 +19,7 @@
   --color-card: var(--card);
   --color-border: var(--border);
   --color-muted: var(--muted);
+  --color-success: var(--success);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -38,31 +42,42 @@ body {
   border: 1px solid var(--border);
   border-radius: 0.75rem;
   padding: 1.5rem;
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.2s;
 }
 
 .card:hover {
   border-color: var(--accent);
-  transition: border-color 0.2s;
+  box-shadow: var(--glow);
+  transform: translateY(-2px);
 }
 
 .btn {
-  background: var(--accent);
+  background: linear-gradient(135deg, #D4800A, #F5A623, #FFD080);
+  background-size: 200% 200%;
   color: #0a0a0a;
   font-weight: 600;
   padding: 0.5rem 1.25rem;
   border-radius: 0.5rem;
   cursor: pointer;
   border: none;
-  transition: opacity 0.15s;
+  transition: box-shadow 0.2s, transform 0.15s, background-position 0.3s;
 }
 
 .btn:hover {
-  opacity: 0.85;
+  box-shadow: 0 0 16px rgba(245, 166, 35, 0.4);
+  transform: translateY(-1px);
+  background-position: 100% 100%;
+}
+
+.btn:active {
+  transform: translateY(0);
 }
 
 .btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 .btn-outline {
@@ -72,12 +87,13 @@ body {
   padding: 0.5rem 1.25rem;
   border-radius: 0.5rem;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.25s;
 }
 
 .btn-outline:hover {
   background: var(--accent);
   color: #0a0a0a;
+  box-shadow: 0 0 12px rgba(245, 166, 35, 0.3);
 }
 
 .badge {
@@ -103,7 +119,60 @@ body {
   color: #f87171;
 }
 
-/* ── Landing page background animations ── */
+/* ── Inputs ── */
+
+input[type="text"],
+input[type="number"],
+select {
+  background: #111 !important;
+  border: 1px solid #333 !important;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  color: #fff;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  outline: none;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+select:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px rgba(245, 166, 35, 0.15);
+}
+
+/* ── Table enhancements ── */
+
+table {
+  font-size: 0.9rem;
+}
+
+thead th {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #888;
+  font-weight: 600;
+}
+
+tbody tr {
+  transition: background 0.15s;
+}
+
+tbody tr:hover {
+  background: rgba(245, 166, 35, 0.04);
+}
+
+/* ── Global background animation (all pages) ── */
+
+.app-bg {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Landing page background animations */
 
 .landing-bg {
   position: fixed;
@@ -130,32 +199,32 @@ body {
 
 
 .ring-1 {
-  width: 500px;
-  height: 500px;
+  width: min(90vw, 800px);
+  height: min(90vw, 800px);
   border-top-color: rgba(245, 166, 35, 0.15);
   border-right-color: rgba(245, 166, 35, 0.08);
   animation: spin 25s linear infinite;
 }
 
 .ring-2 {
-  width: 380px;
-  height: 380px;
+  width: min(70vw, 600px);
+  height: min(70vw, 600px);
   border-bottom-color: rgba(255, 255, 255, 0.1);
   border-left-color: rgba(255, 255, 255, 0.05);
   animation: spin 20s linear infinite reverse;
 }
 
 .ring-3 {
-  width: 260px;
-  height: 260px;
+  width: min(50vw, 420px);
+  height: min(50vw, 420px);
   border-top-color: rgba(245, 166, 35, 0.12);
   border-left-color: rgba(245, 166, 35, 0.06);
   animation: spin 15s linear infinite;
 }
 
 .ring-4 {
-  width: 160px;
-  height: 160px;
+  width: min(30vw, 240px);
+  height: min(30vw, 240px);
   border-bottom-color: rgba(255, 255, 255, 0.08);
   border-right-color: rgba(255, 255, 255, 0.04);
   animation: spin 12s linear infinite reverse;
@@ -170,8 +239,8 @@ body {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 400px;
-  height: 400px;
+  width: min(80vw, 700px);
+  height: min(80vw, 700px);
   transform: translate(-50%, -50%);
   background: radial-gradient(circle, rgba(245, 166, 35, 0.06) 0%, transparent 70%);
   animation: pulse 4s ease-in-out infinite;
@@ -238,11 +307,11 @@ body {
     font-size: 0.7rem;
   }
 
-  .ring-1 { width: 300px; height: 300px; }
-  .ring-2 { width: 220px; height: 220px; }
-  .ring-3 { width: 150px; height: 150px; }
-  .ring-4 { width: 100px; height: 100px; }
-  .glow-orb { width: 250px; height: 250px; }
+  .ring-1 { width: 85vw; height: 85vw; }
+  .ring-2 { width: 65vw; height: 65vw; }
+  .ring-3 { width: 45vw; height: 45vw; }
+  .ring-4 { width: 28vw; height: 28vw; }
+  .glow-orb { width: 70vw; height: 70vw; }
 }
 
 /* Scrollable tables */
@@ -310,12 +379,18 @@ body {
 .stepper-step--active .stepper-circle {
   border-color: var(--accent);
   color: var(--accent);
-  box-shadow: 0 0 8px rgba(245, 166, 35, 0.3);
+  box-shadow: 0 0 12px rgba(245, 166, 35, 0.4);
+  animation: stepper-pulse 2s ease-in-out infinite;
 }
 
 .stepper-step--active .stepper-label {
   color: var(--accent);
   font-weight: 600;
+}
+
+@keyframes stepper-pulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(245, 166, 35, 0.3); }
+  50% { box-shadow: 0 0 16px rgba(245, 166, 35, 0.5); }
 }
 
 .stepper-step--completed .stepper-circle {
@@ -343,11 +418,12 @@ body {
   border-radius: 0.75rem;
   margin-bottom: 1rem;
   overflow: hidden;
-  transition: border-color 0.2s;
+  transition: border-color 0.3s, box-shadow 0.3s;
 }
 
 .phase-card--active {
   border-color: var(--accent);
+  box-shadow: 0 0 20px rgba(245, 166, 35, 0.08);
 }
 
 .phase-card--completed {
@@ -401,11 +477,17 @@ body {
 /* ── Wallet Card ── */
 
 .wallet-card {
-  background: #141414;
+  background: linear-gradient(145deg, #141414, #1a1a1a);
   border: 1px solid #2a2a2a;
   border-radius: 0.75rem;
   padding: 1rem;
   margin-bottom: 1rem;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.wallet-card:hover {
+  border-color: rgba(245, 166, 35, 0.3);
+  box-shadow: 0 0 24px rgba(245, 166, 35, 0.06);
 }
 
 .wallet-header {
@@ -521,7 +603,8 @@ body {
 /* ── Faucet Button ── */
 
 .faucet-btn {
-  background: linear-gradient(135deg, #D4800A, #F5A623);
+  background: linear-gradient(135deg, #D4800A, #F5A623, #FFD080);
+  background-size: 200% 200%;
   color: #000;
   font-weight: 700;
   padding: 0.5rem 1rem;
@@ -529,18 +612,47 @@ body {
   border: none;
   cursor: pointer;
   font-size: 0.85rem;
-  transition: opacity 0.15s, transform 0.15s;
+  transition: box-shadow 0.2s, transform 0.15s, background-position 0.4s;
+  position: relative;
+  overflow: hidden;
+}
+
+.faucet-btn::after {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(
+    45deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.15) 50%,
+    transparent 70%
+  );
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%) rotate(25deg); }
+  100% { transform: translateX(100%) rotate(25deg); }
 }
 
 .faucet-btn:hover {
-  opacity: 0.9;
+  box-shadow: 0 0 20px rgba(245, 166, 35, 0.4);
   transform: translateY(-1px);
+  background-position: 100% 100%;
 }
 
 .faucet-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
+  box-shadow: none;
+}
+
+.faucet-btn:disabled::after {
+  animation: none;
 }
 
 .faucet-btn--compact {
@@ -551,11 +663,31 @@ body {
 /* ── Fade in animation ── */
 
 .fade-in {
-  animation: fade-in 0.3s ease-out;
+  animation: fade-in 0.5s ease-out;
 }
+
+.fade-in > * {
+  animation: fade-in-stagger 0.5s ease-out both;
+}
+
+.fade-in > *:nth-child(1) { animation-delay: 0.05s; }
+.fade-in > *:nth-child(2) { animation-delay: 0.1s; }
+.fade-in > *:nth-child(3) { animation-delay: 0.15s; }
+.fade-in > *:nth-child(4) { animation-delay: 0.2s; }
+.fade-in > *:nth-child(5) { animation-delay: 0.25s; }
+.fade-in > *:nth-child(6) { animation-delay: 0.3s; }
+.fade-in > *:nth-child(7) { animation-delay: 0.35s; }
+.fade-in > *:nth-child(8) { animation-delay: 0.4s; }
+.fade-in > *:nth-child(9) { animation-delay: 0.45s; }
+.fade-in > *:nth-child(10) { animation-delay: 0.5s; }
 
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in-stagger {
+  from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
@@ -575,6 +707,13 @@ body {
   padding: 0.75rem 1rem;
   flex: 1;
   min-width: 120px;
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.2s;
+}
+
+.stat-card:hover {
+  border-color: rgba(245, 166, 35, 0.3);
+  box-shadow: 0 0 16px rgba(245, 166, 35, 0.08);
+  transform: translateY(-2px);
 }
 
 .stat-value {
@@ -588,4 +727,107 @@ body {
   font-size: 0.75rem;
   color: #666;
   margin-top: 0.25rem;
+}
+
+/* ── Custom scrollbar ── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* ── Selection ── */
+
+::selection {
+  background: rgba(245, 166, 35, 0.3);
+  color: #fff;
+}
+
+/* ── Landing hero gradient text ── */
+
+.gradient-text {
+  background: linear-gradient(135deg, #F5A623, #FFD080, #F5A623);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: gradient-shift 4s ease-in-out infinite;
+}
+
+@keyframes gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* ── Protocol step cards ── */
+
+.protocol-step {
+  padding: 1.25rem;
+  background: #111;
+  border-radius: 0.75rem;
+  border: 1px solid #222;
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.2s;
+}
+
+.protocol-step:hover {
+  border-color: rgba(245, 166, 35, 0.3);
+  box-shadow: 0 0 20px rgba(245, 166, 35, 0.06);
+  transform: translateY(-3px);
+}
+
+/* ── Role card enhancements ── */
+
+.role-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.role-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.role-card:hover::before {
+  opacity: 1;
+}
+
+/* ── Waiting dots animation ── */
+
+.waiting-dots::after {
+  content: "";
+  animation: dots 1.5s steps(4, end) infinite;
+}
+
+@keyframes dots {
+  0% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75% { content: "..."; }
+}
+
+/* ── Nav enhancement ── */
+
+nav {
+  backdrop-filter: blur(12px);
+  background: rgba(10, 10, 10, 0.8) !important;
 }

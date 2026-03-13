@@ -22,12 +22,27 @@ const RPC_PASS = process.env.BITCOIN_RPC_PASS || "veiled";
 
 function callWallet(command: string, params: Record<string, unknown> = {}) {
   const input = JSON.stringify({ command, ...params });
-  const result = execFileSync(WALLET_BIN, {
-    input,
-    encoding: "utf8",
-    timeout: 30000,
-  });
-  return JSON.parse(result);
+  try {
+    const result = execFileSync(WALLET_BIN, {
+      input,
+      encoding: "utf8",
+      timeout: 30000,
+    });
+    return JSON.parse(result);
+  } catch (err: any) {
+    // execFileSync throws on non-zero exit; extract the actual error
+    const stdout = err.stdout?.toString?.() || "";
+    const stderr = err.stderr?.toString?.() || "";
+    try {
+      const parsed = JSON.parse(stdout);
+      if (parsed.error) throw new Error(parsed.error);
+    } catch (parseErr) {
+      if (parseErr instanceof Error && parseErr.message !== stdout) throw parseErr;
+    }
+    throw new Error(
+      stderr || stdout || `wallet command '${command}' failed (exit ${err.status})`
+    );
+  }
 }
 
 function statePath(name: string): string {

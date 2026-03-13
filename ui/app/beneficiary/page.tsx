@@ -6,6 +6,7 @@ import PhaseCard from "@/components/PhaseCard";
 import WalletCard from "@/components/WalletCard";
 import HexDisplay from "@/components/HexDisplay";
 import { useToast } from "@/components/ToastProvider";
+import { useLocalState } from "@/lib/useLocalState";
 
 interface Merchant {
   name: string;
@@ -44,27 +45,28 @@ const STEPS = [
 export default function BeneficiaryPage() {
   const { toast } = useToast();
 
-  const [name, setName] = useState("");
-  const [phi, setPhi] = useState<string | null>(null);
-  const [regIndex, setRegIndex] = useState<number | null>(null);
-  const [setStatus, setSetStatus] = useState<{ count: number; capacity: number } | null>(null);
-  const [finalized, setFinalized] = useState(false);
+  // Persisted state (survives page refresh)
+  const [name, setName] = useLocalState("ben:name", "");
+  const [phi, setPhi] = useLocalState<string | null>("ben:phi", null);
+  const [regIndex, setRegIndex] = useLocalState<number | null>("ben:regIndex", null);
+  const [setStatus, setSetStatus] = useLocalState<{ count: number; capacity: number } | null>("ben:setStatus", null);
+  const [finalized, setFinalized] = useLocalState("ben:finalized", false);
+  const [registrations, setRegistrations] = useLocalState<Registration[]>("ben:registrations", []);
+  const [payments, setPayments] = useLocalState<Payment[]>("ben:payments", []);
+  const [walletAddress, setWalletAddress] = useLocalState("ben:walletAddr", "");
+  const [walletMnemonic, setWalletMnemonic] = useLocalState("ben:walletMnemonic", "");
+  const [walletCreated, setWalletCreated] = useLocalState("ben:walletCreated", false);
+  const [registryAddress, setRegistryAddress] = useLocalState("ben:registryAddr", "");
+
+  // Ephemeral state (no persistence needed)
   const [merchants, setMerchants] = useState<Merchant[]>([]);
   const [selectedMerchant, setSelectedMerchant] = useState("");
-  const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [payMerchant, setPayMerchant] = useState("");
   const [payAmount, setPayAmount] = useState("5000");
-  const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState("");
   const [initDone, setInitDone] = useState(false);
   const [initWaiting, setInitWaiting] = useState(false);
-  const [registryAddress, setRegistryAddress] = useState("");
-
-  // Wallet state
-  const [walletAddress, setWalletAddress] = useState("");
   const [walletBalance, setWalletBalance] = useState(0);
-  const [walletMnemonic, setWalletMnemonic] = useState("");
-  const [walletCreated, setWalletCreated] = useState(false);
   const [walletLoading, setWalletLoading] = useState(false);
 
   // Incoming payments
