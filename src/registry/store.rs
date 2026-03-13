@@ -1,181 +1,75 @@
 use crate::core::registry::Registry;
 use crate::core::tx::{build_identity_tree, IdentityTXO, IdentityTree};
-use crate::core::types::{Commitment, Name};
+use crate::core::types::Commitment;
 use crate::core::Merchant;
 use bitcoin::{Amount, OutPoint};
 use std::collections::HashMap;
-
-pub struct BeneficiaryInfo {
-    pub phi: Commitment,
-    pub name: String,
-    pub email: String,
-    pub phone: String,
-    pub address: String,
-}
+use tokio::sync::watch;
 
 pub struct MerchantInfo {
     pub merchant: Merchant,
     pub email: String,
     pub phone: String,
-    pub address: String,
 }
 
-pub struct FinalizedSet {
+pub struct ActiveSet {
     pub registry: Registry,
-    pub tree: IdentityTree,
-}
-
-pub struct AnonymitySetState {
-    pub beneficiaries: Vec<BeneficiaryInfo>,
-    pub merchant_names: Vec<String>,
+    pub beneficiary_capacity: usize,
+    pub finalized: bool,
+    pub tree: Option<IdentityTree>,
+    pub finalization_tx: watch::Sender<bool>,
 }
 
 pub struct RegistryStore {
     pub merchant_pool: HashMap<String, MerchantInfo>,
-    pub anonymity_sets: HashMap<u64, AnonymitySetState>,
-    pub finalized_sets: HashMap<u64, FinalizedSet>,
-    pub beneficiary_capacity: usize,
-    pub merchant_capacity: usize,
+    pub active_sets: HashMap<u64, ActiveSet>,
 }
 
 impl RegistryStore {
-    pub fn new(beneficiary_capacity: usize, merchant_capacity: usize) -> Self {
+    pub fn new() -> Self {
         Self {
             merchant_pool: HashMap::new(),
-            anonymity_sets: HashMap::new(),
-            finalized_sets: HashMap::new(),
-            beneficiary_capacity,
-            merchant_capacity,
+            active_sets: HashMap::new(),
         }
     }
 
     pub fn register_merchant(
         &mut self,
-        name: Name,
-        credential_generator: [u8; 33],
-        origin: String,
+        name: &str,
+        origin: &str,
         email: String,
         phone: String,
-        address: String,
-    ) {
-        let name_str = name.0.clone();
-        if !self.merchant_pool.contains_key(&name_str) {
-            self.merchant_pool.insert(
-                name_str,
-                MerchantInfo {
-                    merchant: Merchant {
-                        name,
-                        credential_generator,
-                        origin,
-                        merchant_id: 0,
-                        registered_identities: HashMap::new(),
-                    },
-                    email,
-                    phone,
-                    address,
-                },
-            );
+    ) -> Result<(), String> {
+        if self.merchant_pool.contains_key(name) {
+            return Err(format!("Merchant '{}' already registered", name));
         }
+        let merchant = Merchant::new(name, origin);
+        self.merchant_pool.insert(
+            name.to_string(),
+            MerchantInfo {
+                merchant,
+                email,
+                phone,
+            },
+        );
+        Ok(())
     }
 
-    pub fn register_beneficiary(
+    pub fn create_set(
         &mut self,
         set_id: u64,
-        phi: Commitment,
-        name: String,
-        email: String,
-        phone: String,
-        address: String,
-        merchant_names: Vec<String>,
-    ) -> Result<usize, String> {
-        if merchant_names.len() != self.merchant_capacity {
-            return Err(format!(
-                "Set requires exactly {} merchants, but {} were specified",
-                self.merchant_capacity,
-                merchant_names.len()
-            ));
+        merchant_names: &[String],
+        beneficiary_capacity: usize,
+    ) -> Result<(), String> {
+        if self.active_sets.contains_key(&set_id) {
+            return Err(format!("Set {} already exists", set_id));
         }
 
-        // Validate all merchants exist in the pool
-        for m_name in &merchant_names {
-            if !self.merchant_pool.contains_key(m_name) {
-                return Err(format!(
-                    "Merchant '{}' not found in registration pool",
-                    m_name
-                ));
-            }
+        if merchant_names.is_empty() {
+            return Err("At least one merchant is required".to_string());
         }
 
-        let state = self
-            .anonymity_sets
-            .entry(set_id)
-            .or_insert_with(|| AnonymitySetState {
-                beneficiaries: Vec::new(),
-                merchant_names: merchant_names.clone(),
-            });
-
-        // Ensure merchant names match the initial configuration for this set
-        if state.merchant_names != merchant_names {
-            return Err(
-                "Merchant selection does not match existing configuration for this set".to_string(),
-            );
-        }
-
-        if state.beneficiaries.len() >= self.beneficiary_capacity {
-            return Err("Anonymity set is full".to_string());
-        }
-
-        if state.beneficiaries.iter().any(|b| b.phi == phi) {
-            return Err("Beneficiary already registered in this set".to_string());
-        }
-
-        state.beneficiaries.push(BeneficiaryInfo {
-            phi,
-            name,
-            email,
-            phone,
-            address,
-        });
-
-        let index = state.beneficiaries.len() - 1;
-
-        // Auto-finalize if capacity is reached
-        if state.beneficiaries.len() == self.beneficiary_capacity {
-            let _ = self.finalize_set(set_id);
-        }
-
-        Ok(index)
-    }
-
-    pub fn finalize_set(&mut self, set_id: u64) -> Result<(), String> {
-        if self.finalized_sets.contains_key(&set_id) {
-            return Ok(());
-        }
-
-        let state = self
-            .anonymity_sets
-            .get(&set_id)
-            .ok_or_else(|| "Set not found".to_string())?;
-
-        let beneficiaries = &state.beneficiaries;
-        let merchant_names = &state.merchant_names;
-
-        if beneficiaries.len() < self.beneficiary_capacity {
-            return Err(format!(
-                "Need at least {} beneficiaries to finalize",
-                self.beneficiary_capacity
-            ));
-        }
-
-        if merchant_names.len() != self.merchant_capacity {
-            return Err(format!(
-                "Set requires exactly {} merchants, but {} were specified",
-                self.merchant_capacity,
-                merchant_names.len()
-            ));
-        }
-
-        // 1. Collect Merchants from pool
+        // Collect merchants from pool
         let mut merchants = Vec::new();
         for m_name in merchant_names {
             let m_info = self
@@ -185,22 +79,92 @@ impl RegistryStore {
             merchants.push(m_info.merchant.clone());
         }
 
-        // 2. Setup Registry
-        let mut registry = Registry::new(self.beneficiary_capacity);
+        // Create core::Registry and setup CRS
+        let mut registry = Registry::new(beneficiary_capacity);
         for m in merchants {
             registry.add_merchant(m);
         }
         registry.setup();
-        for b in beneficiaries.iter() {
-            registry.add_beneficiary(b.phi);
+
+        let (finalization_tx, _) = watch::channel(false);
+        self.active_sets.insert(
+            set_id,
+            ActiveSet {
+                registry,
+                beneficiary_capacity,
+                finalized: false,
+                tree: None,
+                finalization_tx,
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn register_beneficiary(
+        &mut self,
+        set_id: u64,
+        phi: Commitment,
+    ) -> Result<usize, String> {
+        let active_set = self
+            .active_sets
+            .get_mut(&set_id)
+            .ok_or_else(|| format!("Set {} not found", set_id))?;
+
+        if active_set.finalized {
+            return Err(format!("Set {} is already finalized", set_id));
         }
 
-        // 3. Build VTxO tree
-        let sats_per_user = 10_000;
-        let identity_txos: Vec<IdentityTXO> = beneficiaries
+        if active_set.registry.beneficiary_count() >= active_set.beneficiary_capacity {
+            return Err("Anonymity set is full".to_string());
+        }
+
+        // Check for duplicate
+        if active_set
+            .registry
+            .anonymity_set()
             .iter()
-            .map(|b| {
-                let pk = bitcoin::secp256k1::PublicKey::from_slice(&b.phi.0).unwrap();
+            .any(|c| *c == phi)
+        {
+            return Err("Beneficiary already registered in this set".to_string());
+        }
+
+        let index = active_set.registry.add_beneficiary(phi);
+
+        Ok(index)
+    }
+
+    pub fn finalize_set(
+        &mut self,
+        set_id: u64,
+        sats_per_user: u64,
+        funding_outpoint: OutPoint,
+    ) -> Result<(), String> {
+        let active_set = self
+            .active_sets
+            .get_mut(&set_id)
+            .ok_or_else(|| format!("Set {} not found", set_id))?;
+
+        if active_set.finalized {
+            return Ok(());
+        }
+
+        if active_set.registry.beneficiary_count() < active_set.beneficiary_capacity {
+            return Err(format!(
+                "Need {} beneficiaries to finalize, have {}",
+                active_set.beneficiary_capacity,
+                active_set.registry.beneficiary_count()
+            ));
+        }
+
+        // Build VTxO tree
+        let identity_txos: Vec<IdentityTXO> = active_set
+            .registry
+            .anonymity_set()
+            .iter()
+            .map(|phi| {
+                let pk = bitcoin::secp256k1::PublicKey::from_slice(&phi.0)
+                    .expect("phi should be a valid compressed public key");
                 IdentityTXO {
                     pubkey: pk,
                     amount: Amount::from_sat(sats_per_user),
@@ -208,16 +172,38 @@ impl RegistryStore {
             })
             .collect();
 
-        let tree = build_identity_tree(&identity_txos, OutPoint::null())
+        let tree = build_identity_tree(&identity_txos, funding_outpoint)
             .map_err(|e| format!("Failed to build VTxO tree: {}", e))?;
 
-        self.finalized_sets
-            .insert(set_id, FinalizedSet { registry, tree });
+        active_set.finalized = true;
+        active_set.tree = Some(tree);
+        let _ = active_set.finalization_tx.send(true);
 
         Ok(())
     }
 
-    pub fn get_set_beneficiaries(&self, set_id: u64) -> Option<&Vec<BeneficiaryInfo>> {
-        self.anonymity_sets.get(&set_id).map(|s| &s.beneficiaries)
+    pub fn get_crs(&self, set_id: u64) -> Result<&Registry, String> {
+        let active_set = self
+            .active_sets
+            .get(&set_id)
+            .ok_or_else(|| format!("Set {} not found", set_id))?;
+        Ok(&active_set.registry)
+    }
+
+    pub fn get_anonymity_set(&self, set_id: u64) -> Result<&ActiveSet, String> {
+        self.active_sets
+            .get(&set_id)
+            .ok_or_else(|| format!("Set {} not found", set_id))
+    }
+
+    pub fn get_vtxo_tree(&self, set_id: u64) -> Result<&IdentityTree, String> {
+        let active_set = self
+            .active_sets
+            .get(&set_id)
+            .ok_or_else(|| format!("Set {} not found", set_id))?;
+        active_set
+            .tree
+            .as_ref()
+            .ok_or_else(|| format!("Set {} not yet finalized", set_id))
     }
 }

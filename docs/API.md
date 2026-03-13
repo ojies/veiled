@@ -1,0 +1,113 @@
+# gRPC API Reference
+
+Veiled exposes two gRPC services: **Registry** and **MerchantService**.
+
+---
+
+## Registry service (`proto/registry.proto`)
+
+### Mutations
+
+| RPC | Request | Response | Description |
+|-----|---------|----------|-------------|
+| `RegisterMerchant` | name, origin, email, phone | message | Register a merchant (rejects duplicates) |
+| `CreateSet` | set_id, merchant_names, beneficiary_capacity | message | Create anonymity set with CRS |
+| `RegisterBeneficiary` | set_id, phi (33 bytes), name, email, phone | message, index | Register commitment in set |
+| `FinalizeSet` | set_id, sats_per_user, funding_txid, funding_vout | message | Seal set and build VTxO tree |
+
+### Queries
+
+| RPC | Request | Response | Description |
+|-----|---------|----------|-------------|
+| `GetMerchants` | — | merchants[] (name, origin, credential_generator) | List all merchants |
+| `GetCrs` | set_id | crs_bytes | Get serialized CRS for a set |
+| `GetAnonymitySet` | set_id | commitments[], finalized, count, capacity | Get set status and commitments |
+| `GetVtxoTree` | set_id | root_tx, fanout_tx | Get consensus-encoded Bitcoin transactions |
+
+### Streaming
+
+| RPC | Request | Response | Description |
+|-----|---------|----------|-------------|
+| `SubscribeSetFinalization` | set_id | stream(commitments[], finalized, count, capacity) | Wait for set finalization |
+
+---
+
+## Merchant service (`proto/merchant.proto`)
+
+| RPC | Request | Response | Description |
+|-----|---------|----------|-------------|
+| `SubmitPaymentRegistration` | pseudonym, public_nullifier, set_id, service_index, friendly_name, proof | message | Register payment identity with ZK proof |
+| `SubmitPaymentRequest` | amount, pseudonym, proof_r, proof_s | address, friendly_name | Request payment with Schnorr proof |
+
+---
+
+## Message details
+
+### Registry messages
+
+```protobuf
+message MerchantRequest {
+  string name = 1;
+  string origin = 2;
+  string email = 3;
+  string phone = 4;
+}
+
+message CreateSetRequest {
+  uint64 set_id = 1;
+  repeated string merchant_names = 2;
+  uint32 beneficiary_capacity = 3;
+}
+
+message BeneficiaryRequest {
+  uint64 set_id = 1;
+  bytes phi = 2;       // 33-byte commitment
+  string name = 3;
+  string email = 4;
+  string phone = 5;
+}
+
+message FinalizeSetRequest {
+  uint64 set_id = 1;
+  uint64 sats_per_user = 2;
+  bytes funding_txid = 3;   // 32-byte txid
+  uint32 funding_vout = 4;
+}
+
+message GetAnonymitySetResponse {
+  repeated bytes commitments = 1;  // each 33 bytes
+  bool finalized = 2;
+  uint32 count = 3;
+  uint32 capacity = 4;
+}
+
+message GetVtxoTreeResponse {
+  bytes root_tx = 1;    // Bitcoin consensus-encoded transaction
+  bytes fanout_tx = 2;  // Bitcoin consensus-encoded transaction
+}
+```
+
+### Merchant messages
+
+```protobuf
+message PaymentRegistrationRequest {
+  bytes pseudonym = 1;          // 33 bytes
+  bytes public_nullifier = 2;   // 33 bytes
+  uint64 set_id = 3;
+  uint32 service_index = 4;
+  string friendly_name = 5;
+  bytes proof = 6;              // serialized PaymentIdentityRegistrationProof
+}
+
+message PaymentRequestMsg {
+  uint64 amount = 1;
+  bytes pseudonym = 2;    // 33 bytes
+  bytes proof_r = 3;      // 33 bytes (nonce commitment)
+  bytes proof_s = 4;      // 32 bytes (Schnorr response)
+}
+
+message PaymentRequestResponse {
+  string address = 1;         // P2TR bitcoin address
+  string friendly_name = 2;
+}
+```

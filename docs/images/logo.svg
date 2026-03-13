@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <clipPath id="logo-clip">
+      <circle cx="100" cy="100" r="95"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="200" height="200" rx="20" fill="#111111"/>
+
+  <!-- Concentric rings -->
+  <circle cx="85" cy="105" r="80" fill="none" stroke="#e0e0e0" stroke-width="6" opacity="0.9"/>
+  <circle cx="85" cy="105" r="62" fill="none" stroke="#e0e0e0" stroke-width="5" opacity="0.8"/>
+  <circle cx="85" cy="105" r="45" fill="none" stroke="#e0e0e0" stroke-width="4.5" opacity="0.7"/>
+  <circle cx="85" cy="105" r="28" fill="none" stroke="#e0e0e0" stroke-width="4" opacity="0.6"/>
+
+  <!-- Bitcoin symbol -->
+  <g transform="translate(72, 78)">
+    <!-- Vertical bars -->
+    <rect x="6" y="0" width="3.5" height="52" rx="1.5" fill="#E8920B"/>
+    <rect x="16" y="0" width="3.5" height="52" rx="1.5" fill="#E8920B"/>
+
+    <!-- B shape - top bump -->
+    <path d="M2,8 L18,8 C26,8 30,12 30,18 C30,24 26,27 18,27 L2,27 Z"
+          fill="none" stroke="#E8920B" stroke-width="4" stroke-linejoin="round"/>
+
+    <!-- B shape - bottom bump -->
+    <path d="M2,25 L20,25 C29,25 33,29 33,35.5 C33,42 29,46 20,46 L2,46 Z"
+          fill="none" stroke="#E8920B" stroke-width="4" stroke-linejoin="round"/>
+  </g>
+</svg>

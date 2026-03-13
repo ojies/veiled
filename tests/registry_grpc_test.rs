@@ -3,14 +3,17 @@ use tokio::sync::Mutex;
 use tonic::transport::Server;
 use veiled::registry::pb::registry_client::RegistryClient;
 use veiled::registry::pb::registry_server::RegistryServer;
-use veiled::registry::pb::{BeneficiaryRequest, FinalizeSetRequest, MerchantRequest};
+use veiled::registry::pb::{
+    BeneficiaryRequest, CreateSetRequest, FinalizeSetRequest, GetAnonymitySetRequest,
+    GetCrsRequest, GetMerchantsRequest, MerchantRequest,
+};
 use veiled::registry::service::RegistryService;
 use veiled::registry::store::RegistryStore;
 
 #[tokio::test]
 async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "[::1]:50052".parse()?;
-    let store = Arc::new(Mutex::new(RegistryStore::new(2, 1)));
+    let store = Arc::new(Mutex::new(RegistryStore::new()));
     let service = RegistryService::new(store);
 
     let server_handle = tokio::spawn(async move {
@@ -30,152 +33,234 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
     let merchant_req = MerchantRequest {
         name: "Test Merchant".to_string(),
         origin: "http://test.com".to_string(),
-        credential_generator: vec![0x02; 33],
         email: "merchant@example.com".to_string(),
         phone: "+987654321".to_string(),
-        address: "456 Crypto Ave".to_string(),
     };
-    let merchant_res = client.register_merchant(merchant_req).await?.into_inner();
-    assert!(merchant_res.success);
+    client.register_merchant(merchant_req).await?;
 
-    // 1.5 Validate Merchant Selection
+    // 1.1 Duplicate merchant should fail
+    let dup_merchant_req = MerchantRequest {
+        name: "Test Merchant".to_string(),
+        origin: "http://test.com".to_string(),
+        email: "dup@example.com".to_string(),
+        phone: "0".to_string(),
+    };
+    let dup_err = client.register_merchant(dup_merchant_req).await;
+    assert!(dup_err.is_err());
+
+    // 1.2 Query merchants
+    let merchants_res = client
+        .get_merchants(GetMerchantsRequest {})
+        .await?
+        .into_inner();
+    assert_eq!(merchants_res.merchants.len(), 1);
+    assert_eq!(merchants_res.merchants[0].name, "Test Merchant");
+    assert_eq!(merchants_res.merchants[0].credential_generator.len(), 33);
+
+    // 2. Create Set (Phase 0: CRS setup)
+    let create_set_req = CreateSetRequest {
+        set_id: 1,
+        merchant_names: vec!["Test Merchant".to_string()],
+        beneficiary_capacity: 2,
+    };
+    client.create_set(create_set_req).await?;
+
+    // 2.1 Duplicate set should fail
+    let dup_set_req = CreateSetRequest {
+        set_id: 1,
+        merchant_names: vec!["Test Merchant".to_string()],
+        beneficiary_capacity: 2,
+    };
+    assert!(client.create_set(dup_set_req).await.is_err());
+
+    // 2.2 Set with unknown merchant should fail
+    let bad_set_req = CreateSetRequest {
+        set_id: 99,
+        merchant_names: vec!["Unknown Merchant".to_string()],
+        beneficiary_capacity: 2,
+    };
+    assert!(client.create_set(bad_set_req).await.is_err());
+
+    // 3. Get CRS (Phase 1: beneficiaries need this)
+    let crs_res = client
+        .get_crs(GetCrsRequest { set_id: 1 })
+        .await?
+        .into_inner();
+    assert!(!crs_res.crs_bytes.is_empty());
+
+    // 3.1 CRS for unknown set should fail
+    assert!(client
+        .get_crs(GetCrsRequest { set_id: 99 })
+        .await
+        .is_err());
+
+    // 4. Register Beneficiaries (Phase 2)
     let secp = bitcoin::secp256k1::Secp256k1::new();
     let sk1 = bitcoin::secp256k1::SecretKey::from_slice(&[0x01; 32])?;
     let pk1 = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk1);
-    let phi = pk1.serialize().to_vec();
+    let phi1 = pk1.serialize().to_vec();
 
-    let bad_merchant_req = BeneficiaryRequest {
-        set_id: 1,
-        phi: phi.clone(),
-        name: "InvalidMerchant".to_string(),
-        email: "fail@test.com".to_string(),
-        phone: "0".to_string(),
-        address: "nowhere".to_string(),
-        merchant_names: vec!["Non Existent".to_string()],
-    };
-    let bad_res = client
-        .register_beneficiary(bad_merchant_req)
+    let ben_res = client
+        .register_beneficiary(BeneficiaryRequest {
+            set_id: 1,
+            phi: phi1.clone(),
+            name: "Alice".to_string(),
+            email: "alice@example.com".to_string(),
+            phone: "+123456789".to_string(),
+        })
         .await?
         .into_inner();
-    assert!(!bad_res.success);
-    assert!(bad_res.message.contains("not found in registration pool"));
+    assert_eq!(ben_res.index, 0);
 
-    let wrong_count_req = BeneficiaryRequest {
-        set_id: 1,
-        phi: vec![0x03; 33],
-        name: "WrongCount".to_string(),
-        email: "fail@test.com".to_string(),
-        phone: "0".to_string(),
-        address: "nowhere".to_string(),
-        merchant_names: vec![],
-    };
-    let count_res = client
-        .register_beneficiary(wrong_count_req)
-        .await?
-        .into_inner();
-    assert!(!count_res.success);
-    assert!(count_res.message.contains("requires exactly 1 merchants"));
+    // 4.1 Duplicate beneficiary should fail
+    assert!(client
+        .register_beneficiary(BeneficiaryRequest {
+            set_id: 1,
+            phi: phi1,
+            name: "AliceDup".to_string(),
+            email: "".to_string(),
+            phone: "".to_string(),
+        })
+        .await
+        .is_err());
 
-    // 2. Register Beneficiary (Success)
-    let beneficiary_req = BeneficiaryRequest {
-        set_id: 1,
-        phi: phi.clone(),
-        name: "AliceBeneficiary".to_string(),
-        email: "alice@example.com".to_string(),
-        phone: "+123456789".to_string(),
-        address: "123 Bitcoin St".to_string(),
-        merchant_names: vec!["Test Merchant".to_string()],
-    };
-    let beneficiary_res = client
-        .register_beneficiary(beneficiary_req)
-        .await?
-        .into_inner();
-    assert!(beneficiary_res.success);
-    assert_eq!(beneficiary_res.index, 0);
-
-    // 2.5 Register with Inconsistent Merchants
-    let inconsistent_req = BeneficiaryRequest {
-        set_id: 1,
-        phi: vec![0x04; 33],
-        name: "Inconsistent".to_string(),
-        email: "fail@test.com".to_string(),
-        phone: "0".to_string(),
-        address: "nowhere".to_string(),
-        merchant_names: vec!["Another Merchant".to_string()], // Existing set has "Test Merchant"
-    };
-    // First we'd need another merchant in the pool for this specific check to trigger correctly if we want to test "exists but different"
-    // But since "Another Merchant" doesn't exist, it will trigger the "not found" check first unless it exists.
-    // Let's add another merchant to the pool first.
-    let merchant_req2 = MerchantRequest {
-        name: "Another Merchant".to_string(),
-        origin: "http://another.com".to_string(),
-        credential_generator: vec![0x03; 33],
-        email: "m2@test.com".to_string(),
-        phone: "0".to_string(),
-        address: "addr".to_string(),
-    };
-    client.register_merchant(merchant_req2).await?;
-
-    let inconsistent_res = client
-        .register_beneficiary(inconsistent_req)
-        .await?
-        .into_inner();
-    assert!(!inconsistent_res.success);
-    assert!(inconsistent_res
-        .message
-        .contains("does not match existing configuration"));
-
-    // 3. Register Duplicate Beneficiary
-    let beneficiary_req_dup = BeneficiaryRequest {
-        set_id: 1,
-        phi: phi,
-        name: "AliceDuplicate".to_string(),
-        email: "alice@example.com".to_string(),
-        phone: "+123456789".to_string(),
-        address: "123 Bitcoin St".to_string(),
-        merchant_names: vec!["Test Merchant".to_string()],
-    };
-    let beneficiary_res_dup = client
-        .register_beneficiary(beneficiary_req_dup)
-        .await?
-        .into_inner();
-    assert!(!beneficiary_res_dup.success);
-    assert!(beneficiary_res_dup.message.contains("already registered"));
-
-    // 3.5 Register Second Beneficiary
+    // 4.2 Register second beneficiary
     let sk2 = bitcoin::secp256k1::SecretKey::from_slice(&[0x02; 32])?;
     let pk2 = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk2);
     let phi2 = pk2.serialize().to_vec();
 
-    let beneficiary_req2 = BeneficiaryRequest {
-        set_id: 1,
-        phi: phi2.clone(),
-        name: "BobBeneficiary".to_string(),
-        email: "bob@example.com".to_string(),
-        phone: "+987654321".to_string(),
-        address: "456 Ethereum St".to_string(),
-        merchant_names: vec!["Test Merchant".to_string()],
-    };
-    let beneficiary_res2 = client
-        .register_beneficiary(beneficiary_req2)
+    client
+        .register_beneficiary(BeneficiaryRequest {
+            set_id: 1,
+            phi: phi2,
+            name: "Bob".to_string(),
+            email: "bob@example.com".to_string(),
+            phone: "+987654321".to_string(),
+        })
+        .await?;
+
+    // 4.3 Query anonymity set
+    let anon_set = client
+        .get_anonymity_set(GetAnonymitySetRequest { set_id: 1 })
         .await?
         .into_inner();
-    assert!(beneficiary_res2.success);
+    assert_eq!(anon_set.count, 2);
+    assert_eq!(anon_set.capacity, 2);
+    assert!(!anon_set.finalized);
+    assert_eq!(anon_set.commitments.len(), 2);
 
-    // 4. Finalize Set
-    let finalize_req = FinalizeSetRequest { set_id: 1 };
-    let finalize_res = client.finalize_set(finalize_req).await?.into_inner();
-    assert!(
-        finalize_res.success,
-        "Finalization failed: {}",
-        finalize_res.message
-    );
+    // 5. Finalize Set (builds VTxO tree)
+    let finalize_res = client
+        .finalize_set(FinalizeSetRequest {
+            set_id: 1,
+            sats_per_user: 10_000,
+            funding_txid: vec![0xaa; 32],
+            funding_vout: 0,
+        })
+        .await?
+        .into_inner();
     assert!(finalize_res.message.contains("finalized"));
 
-    // 5. Finalize non-existent set
-    let finalize_req_fail = FinalizeSetRequest { set_id: 99 };
-    let finalize_res_fail = client.finalize_set(finalize_req_fail).await?.into_inner();
-    assert!(!finalize_res_fail.success);
+    // 5.1 Verify set is now finalized
+    let anon_set_final = client
+        .get_anonymity_set(GetAnonymitySetRequest { set_id: 1 })
+        .await?
+        .into_inner();
+    assert!(anon_set_final.finalized);
+
+    // 5.2 Finalize non-existent set should fail
+    assert!(client
+        .finalize_set(FinalizeSetRequest {
+            set_id: 99,
+            sats_per_user: 10_000,
+            funding_txid: vec![0xaa; 32],
+            funding_vout: 0,
+        })
+        .await
+        .is_err());
+
+    // 6. SubscribeSetFinalization — already finalized set returns immediately
+    let response = client
+        .subscribe_set_finalization(GetAnonymitySetRequest { set_id: 1 })
+        .await?;
+    let mut stream = response.into_inner();
+    let msg = stream.message().await?.expect("should receive finalized set");
+    assert!(msg.finalized);
+    assert_eq!(msg.count, 2);
+    assert_eq!(msg.capacity, 2);
+    assert_eq!(msg.commitments.len(), 2);
+
+    // 6.1 SubscribeSetFinalization — wait for finalization of a new set
+    client
+        .create_set(CreateSetRequest {
+            set_id: 2,
+            merchant_names: vec!["Test Merchant".to_string()],
+            beneficiary_capacity: 2,
+        })
+        .await?;
+
+    // Subscribe before finalization — should block until finalized
+    let mut sub_client = RegistryClient::connect("http://[::1]:50052").await?;
+    let sub_handle = tokio::spawn(async move {
+        let response = sub_client
+            .subscribe_set_finalization(GetAnonymitySetRequest { set_id: 2 })
+            .await
+            .unwrap();
+        let mut stream = response.into_inner();
+        stream.message().await.unwrap().unwrap()
+    });
+
+    // Small delay to ensure subscriber is connected before we finalize
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Register beneficiaries and finalize while subscriber waits
+    let sk3 = bitcoin::secp256k1::SecretKey::from_slice(&[0x03; 32])?;
+    let pk3 = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk3);
+    client
+        .register_beneficiary(BeneficiaryRequest {
+            set_id: 2,
+            phi: pk3.serialize().to_vec(),
+            name: "Carol".to_string(),
+            email: "".to_string(),
+            phone: "".to_string(),
+        })
+        .await?;
+
+    let sk4 = bitcoin::secp256k1::SecretKey::from_slice(&[0x04; 32])?;
+    let pk4 = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk4);
+    client
+        .register_beneficiary(BeneficiaryRequest {
+            set_id: 2,
+            phi: pk4.serialize().to_vec(),
+            name: "Dave".to_string(),
+            email: "".to_string(),
+            phone: "".to_string(),
+        })
+        .await?;
+
+    client
+        .finalize_set(FinalizeSetRequest {
+            set_id: 2,
+            sats_per_user: 5_000,
+            funding_txid: vec![0xbb; 32],
+            funding_vout: 0,
+        })
+        .await?;
+
+    // Subscriber should receive the finalized set
+    let sub_msg = tokio::time::timeout(std::time::Duration::from_secs(5), sub_handle)
+        .await
+        .expect("subscription should complete within 5s")
+        .expect("subscription task should not panic");
+    assert!(sub_msg.finalized);
+    assert_eq!(sub_msg.count, 2);
+    assert_eq!(sub_msg.commitments.len(), 2);
+
+    // 6.2 Subscribe to non-existent set should fail
+    assert!(client
+        .subscribe_set_finalization(GetAnonymitySetRequest { set_id: 99 })
+        .await
+        .is_err());
 
     server_handle.abort();
     Ok(())

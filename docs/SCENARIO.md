@@ -1,434 +1,412 @@
-# Scenario: Anonymous Authentication with CRS-ASC on Bitcoin
+# Scenario: Pseudonymous Payment Registration on Bitcoin
 
-This document walks through the CRS-ASC protocol end-to-end, showing how a
-user creates a master credential, registers on Bitcoin, and authenticates
-with service providers — all while maintaining automatic cross-service
-unlinkability.
-
----
-
-## Setup: The CRS exists (Phase 0)
-
-Before anything else happens, a trusted setup produces the **Common Reference
-String (CRS)** — a set of public parameters that everyone in the system shares:
-
-```
-crs = (G, q, g, h_1..h_L, v_1..v_L, G_auth_1..G_auth_L)
-```
-
-What's in it:
-- **g** = a base generator point on secp256k1, derived by hashing the string
-  `"CRS-ASC-generator-0"` to a curve point. Nobody knows its discrete log.
-- **h_1..h_L** = L additional generator points, one per service provider, each
-  derived from `"CRS-ASC-generator-{l}"`. These are provably independent from
-  g and from each other (NUMS — Nothing Up My Sleeve).
-- **v_1..v_L** = the names of L registered service providers (e.g., "twitter.com",
-  "github.com"). These strings double as HKDF salts for nullifier derivation.
-- **G_auth_1..G_auth_L** = credential generators for each service provider.
-- The Identity Registry is initialized with set size N = 1024.
-
-The CRS is public — every user and service provider has access to it.
-The key property of the generators is that nobody knows the ratio between any
-two of them. If someone could compute `γ` such that `h_1 = γ·g`, they could
-forge commitments. HashToCurve prevents this.
+This document walks through the Veiled protocol end-to-end, showing how a
+beneficiary creates a master credential, registers with a registry backed by
+Bitcoin, and establishes pseudonymous payment identities with merchants — all
+while maintaining zero-knowledge membership privacy.
 
 ---
 
-## Phase 1 — Alice creates her master credential (local, offline)
+## Cast
 
-Everything in this phase happens on Alice's device. Nothing touches the network.
+- **Registry**: A gRPC server that manages merchants, anonymity sets, CRS
+  generation, and VTxO tree construction. Stateful but does not participate
+  in the cryptographic protocol after setup.
+- **Merchant 1** ("CoffeeCo"): A payment provider that verifies beneficiary
+  proofs and sends Bitcoin payments.
+- **Merchant 2** ("BookStore"): Another payment provider. Alice will register
+  with both to demonstrate cross-merchant unlinkability.
+- **Alice**: A beneficiary who wants to receive payments from both merchants
+  without them being able to link her pseudonyms.
+
+---
+
+## Phase 0 — Registry and CRS Setup
+
+An admin starts the registry and registers the merchants:
+
+```
+# Start registry
+veiled-registry-grpc --listen [::1]:50051
+
+# Register merchants (via gRPC client)
+RegisterMerchant { name: "CoffeeCo", origin: "https://coffeeco.com" }
+RegisterMerchant { name: "BookStore", origin: "https://bookstore.com" }
+
+# Create anonymity set for 8 beneficiaries with both merchants
+CreateSet { set_id: 1, merchant_names: ["CoffeeCo", "BookStore"], beneficiary_capacity: 8 }
+```
+
+When `CreateSet` is called, the registry:
+1. Looks up CoffeeCo and BookStore in its merchant pool
+2. Builds a **CRS** from their names using hash-to-curve:
+
+```
+g      = HashToCurve("CRS-ASC-generator-0",     DST="CRS-ASC-v1")  # base generator
+h_1    = HashToCurve("CRS-ASC-generator-1",     DST="CRS-ASC-v1")  # CoffeeCo generator
+h_2    = HashToCurve("CRS-ASC-generator-2",     DST="CRS-ASC-v1")  # BookStore generator
+h_name = HashToCurve("CRS-ASC-generator-name",  DST="CRS-ASC-v1")  # name generator
+```
+
+All generators are provably independent (NUMS — nobody knows the discrete log
+relationships between them). The CRS is public — beneficiaries and merchants
+fetch it from the registry.
+
+---
+
+## Phase 1 — Alice Creates Her Credential (local, offline)
+
+Alice fetches the CRS from the registry via `GetCrs(set_id: 1)`, then creates
+her credential locally. Nothing touches the network in this step.
 
 ### Step 1: Generate three secrets
 
 ```
-sk ←$ {0,1}^256     # root secret — derives all nullifiers (the "master key")
-r  ←$ {0,1}^256     # child credential randomness — for deriving service-specific auth keys later
-k  ←$ Z_q           # Pedersen blinding key — hides everything inside the commitment
+sk ←$ {0,1}^256     # master secret — derives all nullifiers
+r  ←$ {0,1}^256     # child randomness — derives per-merchant auth keys
+k  ←$ Z_q           # blinding key — hides everything in the commitment
 ```
 
-Why three separate secrets? Each serves a different purpose and keeping them
-independent prevents information leakage between protocol layers. If `sk` were
-reused for blinding, learning the blinding factor would reveal nullifier
-information.
+Three independent secrets ensure no information leakage between protocol
+layers. If `sk` were reused for blinding, learning the blinding factor would
+reveal nullifier information.
 
-### Step 2: Derive L nullifier scalars (one per service)
-
-```
-for l = 1..L:
-  s_l = HKDF(sk, salt=v_l, info="CRS-ASC-nullifier")
-```
-
-HKDF (HMAC-based Key Derivation Function) takes Alice's master secret `sk` and
-combines it with each service provider's name `v_l` to produce a different
-32-byte scalar. For example:
-
-- `s_1 = HKDF(sk, "twitter.com")` → a 32-byte number for Twitter
-- `s_2 = HKDF(sk, "github.com")` → a completely different 32-byte number for GitHub
-
-Even though both come from the same `sk`, HKDF guarantees the outputs are
-computationally indistinguishable from independent random values. This is what
-makes cross-service unlinkability automatic — nobody can tell that `s_1` and
-`s_2` came from the same secret.
-
-Each scalar also has a public form — the **public nullifier**:
+### Step 2: Derive per-merchant nullifier scalars
 
 ```
-nul_l = s_l · g    (scalar × generator point = a new curve point)
+s_1 = HKDF(sk, salt="CoffeeCo",  info="CRS-ASC-nullifier")
+s_2 = HKDF(sk, salt="BookStore", info="CRS-ASC-nullifier")
 ```
 
-This is a one-way operation. Service provider l will see `nul_l` but cannot
-recover `s_l` from it (that would require solving the discrete log problem on
-secp256k1).
+HKDF guarantees the two outputs are computationally indistinguishable from
+independent random values, even to someone who knows both merchant names.
 
 ### Step 3: Compute the master identity commitment
 
 ```
-Φ = k·g + s_1·h_1 + s_2·h_2 + ... + s_L·h_L
+name_scalar = SHA256("alice")
+
+Φ = k·g + s_1·h_1 + s_2·h_2 + name_scalar·h_name
 ```
 
-This packs all L nullifier scalars into a single 33-byte elliptic curve point.
-The blinding key `k` hides everything — without knowing `k`, an observer sees
-only a random-looking point on secp256k1.
+This packs both nullifier scalars and Alice's name hash into a single 33-byte
+secp256k1 point. The blinding key `k` hides everything.
 
-**The result**: Alice's master credential is `(Φ, sk, r, k)`.
-
-She only needs to store `(sk, r, k)` — about **96 bytes**. The commitment `Φ`
-can always be recomputed from these three secrets plus the public CRS, since
-all L nullifier scalars are deterministically derived from `sk` and the service
-names in the CRS.
+**Result**: Alice's master credential is `(Φ, sk, r, k)`. She stores
+`(sk, r, k)` — about 96 bytes. Φ can always be recomputed from these secrets
+plus the public CRS.
 
 ---
 
-## Phase 2 — Alice registers on Bitcoin
+## Phase 2 — Alice Registers and Waits for Finalization
 
-### Step 1: Post Φ to the Identity Registry
-
-Alice sends her master identity commitment and all L nullifier scalars:
+### Step 1: Register Φ with the registry
 
 ```
-POST /api/v1/register-identity
-{
-  "commitment": "<Φ as 66 hex chars>",
-  "nullifiers": ["<s_1 as 64 hex>", "<s_2 as 64 hex>", ..., "<s_L as 64 hex>"]
+RegisterBeneficiary {
+    set_id: 1,
+    phi: Φ,            # 33-byte commitment
+    name: "alice"
+}
+→ BeneficiaryResponse { index: 0 }
+```
+
+The registry appends Φ to the anonymity set for set 1 and returns Alice's
+index. The set has capacity 8 — once 8 beneficiaries register, the set can
+be finalized.
+
+### Step 2: Subscribe to finalization
+
+```
+SubscribeSetFinalization { set_id: 1 }
+→ stream waiting...
+```
+
+Alice opens a server-streaming gRPC connection. This blocks until the set is
+finalized. She doesn't need to poll — the registry notifies all subscribers
+via a `tokio::sync::watch` channel when finalization occurs.
+
+Meanwhile, 7 other beneficiaries (Bob, Carol, Dave, Eve, Frank, Grace, Heidi)
+register their own commitments Φ_2 through Φ_8.
+
+### Step 3: Set finalization
+
+An admin finalizes the set once all 8 beneficiaries have registered:
+
+```
+FinalizeSet {
+    set_id: 1,
+    sats_per_user: 10_000,
+    funding_txid: <32-byte txid>,
+    funding_vout: 0
 }
 ```
 
-The registry checks ALL L nullifiers atomically — if any single one has been
-seen before (meaning someone with the same master secret already registered),
-the entire registration is rejected with **409 Conflict**. This is Sybil
-resistance: one master secret → one identity, enforced at registration time.
-
-If accepted, the registry appends Φ to the current anonymity set and persists
-everything to SQLite.
-
-### Step 2: Wait for the anonymity set to fill
-
-Alice's Φ is now in an anonymity set `Λ_d` along with other users'
-commitments. The set needs exactly 1024 members before it can be used.
-
-Why wait? Two reasons:
-1. **Privacy**: an anonymity set with 5 members offers almost no privacy.
-   With 1024, an observer cannot tell which of the 1024 users is proving
-   membership — that's the "anonymity" in "anonymity set."
-2. **Proof correctness**: the Bootle/Groth ZK proof is generated against a
-   fixed, complete list. A partially filled set could change between proof
-   generation and verification, invalidating the proof.
-
-### Step 3: Set seals and is anchored on Bitcoin
-
-Once 1024 users have registered, the set is **sealed** — frozen permanently.
-It is then anchored on Bitcoin using a **vtxo-tree** (virtual transaction
-output tree):
+The registry:
+1. **Seals** the anonymity set (frozen permanently — no additions or removals)
+2. Builds a **VTxO tree** from all 8 commitments:
 
 ```
-                    [Root TX]  ← broadcast on-chain (single UTXO)
-                   /          \
-             [Branch TX]    [Branch TX]
-             /        \      /        \
-           ...       ...   ...       ...
-          /   \
-      [Leaf]  [Leaf]  ...  [Leaf]   ← 1024 P2TR outputs, one per user
-       Φ_1     Φ_2          Φ_1024
+            [Root TX]  ← single UTXO broadcast on Bitcoin
+           /          \
+     [Fanout TX]      ...
+     /    |    \
+  [Φ_1] [Φ_2] ... [Φ_8]   ← 8 P2TR outputs, one per beneficiary
 ```
 
-- Only the **root transaction** is broadcast on Bitcoin. This is one UTXO
-  that cryptographically commits to the entire tree of 1024 users.
-- Each **leaf** is a P2TR (Pay-to-Taproot) output. The internal key of each
-  leaf is the user's commitment Φ. This works because Φ is a 33-byte
-  compressed secp256k1 point — which is already a valid Bitcoin public key.
-- The interior nodes are **pre-signed connector transactions** that link the
-  root to the leaves. They are not broadcast unless a user needs to exit
-  unilaterally (claim their leaf output on-chain independently).
-- This replaces the Ethereum smart contract `IdR` from the ASC paper. Instead
-  of paying gas to store 1024 entries in EVM storage, a single Bitcoin UTXO
-  anchors the entire identity set.
+Each leaf is a P2TR output whose internal key is the beneficiary's Φ. This
+works because Φ is already a valid compressed secp256k1 public key.
 
-### Step 4: Alice stores her registered identity
+3. Notifies all subscribers via the streaming RPC
 
-Alice downloads the complete frozen set and finds her position:
+### Step 4: Alice receives the finalized set
+
+Alice's stream resolves with the complete anonymity set:
 
 ```
-(Φ_j, sk, r, k, d̂, Λ_{d̂})
-
-Where:
-  Φ_j    = her specific master identity (one of the 1024)
-  j      = her index within the set (e.g., position 417 out of 1024)
-  d̂      = which anonymity set she's in (sets are numbered sequentially)
-  Λ_{d̂} = the complete frozen list [Φ_1, ..., Φ_1024]
+GetAnonymitySetResponse {
+    commitments: [Φ_1, Φ_2, ..., Φ_8],
+    finalized: true,
+    count: 8,
+    capacity: 8
+}
 ```
 
-Alice needs the full set stored locally because the Bootle/Groth ZK proof
-requires the prover to have the entire ring of 1024 commitments. To prove
-"I know the opening to one of these 1024 commitments without revealing which
-one," you need to know all 1024 to construct the proof.
+She registers locally, determining her index (0) in the set. She also fetches
+the VTxO tree:
+
+```
+GetVtxoTree { set_id: 1 }
+→ GetVtxoTreeResponse { root_tx: <bytes>, fanout_tx: <bytes> }
+```
+
+Alice needs the full anonymity set stored locally because the Bootle/Groth ZK
+proof requires the prover to have the entire ring of commitments.
 
 ---
 
 ## What the anonymity set looks like
 
 ```
-Λ = [Φ_1,         Φ_2,         ..., Φ_j (Alice),   ..., Φ_1024       ]
-   = [k_1·g + Σ s_{1,l}·h_l,  k_2·g + Σ s_{2,l}·h_l,  ...,  k_N·g + Σ s_{N,l}·h_l]
+Λ = [Φ_1 (Alice), Φ_2 (Bob), ..., Φ_8 (Heidi)]
+
+Each Φ_i = k_i·g + s_{i,1}·h_1 + s_{i,2}·h_2 + name_i·h_name
 ```
 
-Each `Φ_i` is an independent multi-value Pedersen commitment from a different
-user, each with their own secrets `(sk_i, k_i)`. No two users share any secret
-values. To an outside observer, the set is just 1024 random-looking 33-byte
-curve points — there is no way to tell which one belongs to Alice without
-knowing her secrets.
+To an observer, the set is 8 random-looking 33-byte curve points. There is no
+way to tell which belongs to Alice without knowing her secrets.
 
-The list is frozen on Bitcoin (anchored via the vtxo-tree root transaction)
-and will never change.
+---
+
+## Phase 3 — Alice Registers Payment Identity with CoffeeCo
+
+Alice wants to receive payments from CoffeeCo (merchant 1). She derives a
+per-merchant identity and proves she's a legitimate member of the anonymity set.
+
+### Step 1: Derive child credential
+
+```
+csk_1 = HKDF(r, salt="CoffeeCo", info="CRS-ASC-child-secret-key")
+ϕ_1   = csk_1 · g     # pseudonym — Alice's public identity at CoffeeCo
+```
+
+### Step 2: Derive public nullifier
+
+```
+nul_1 = s_1 · g       # public nullifier — Sybil resistance at CoffeeCo
+```
+
+If Alice tries to register again with CoffeeCo, she'll produce the same
+`nul_1`, and the merchant will reject the duplicate.
+
+### Step 3: Generate zero-knowledge proof
+
+The proof demonstrates two things simultaneously:
+
+1. **Membership**: "I know the opening of one of the 8 commitments in Λ,
+   without revealing which one."
+
+   The proof works by **shifting** each commitment:
+   ```
+   D[i] = Φ_i - s_1·h_1    for all i = 1..8
+   ```
+   At Alice's index (0), this cancels the CoffeeCo term:
+   ```
+   D[0] = k·g + s_2·h_2 + name_scalar·h_name
+   ```
+   An adapted Bootle/Groth proof then proves knowledge of the opening to one
+   of the 8 shifted commitments.
+
+2. **Nullifier authenticity**: "nul_1 = s_1 · g is correctly derived from my
+   committed identity." (Schnorr proof)
+
+The proof also embeds `name_scalar = SHA256("alice")`, which the merchant can
+verify to confirm Alice's friendly name.
+
+### Step 4: Submit to merchant
+
+```
+SubmitPaymentRegistration {
+    pseudonym: ϕ_1,          # 33 bytes
+    public_nullifier: nul_1, # 33 bytes
+    set_id: 1,
+    service_index: 1,
+    friendly_name: "alice",
+    proof: <serialized proof>
+}
+→ "Payment identity 'alice' registered successfully"
+```
+
+---
+
+## Phase 4 — CoffeeCo Verifies the Registration
+
+CoffeeCo's merchant server receives the registration and:
+
+1. Deserializes the zero-knowledge proof
+2. Calls `receive_payment_registration(&crs, &anonymity_set, &registration)`:
+   - Reconstructs the shifted commitments `D[i] = Φ_i - nul_1·h_1`
+   - Verifies the Bootle/Groth membership proof over the shifted set
+   - Verifies the Schnorr proof that `nul_1 = s_1 · g`
+   - Verifies `name_scalar` matches `SHA256("alice")`
+3. Checks that `ϕ_1` (pseudonym) is not already registered (duplicate check)
+4. Stores the mapping: `ϕ_1 → { friendly_name: "alice", nullifier: nul_1, set_id: 1 }`
+
+**If Alice tries to register again**: the same `nul_1` would be produced
+(deterministic from `sk` + "CoffeeCo"), and the merchant would detect the
+duplicate pseudonym.
+
+---
+
+## Phase 5 — Alice Requests a Payment
+
+Later, Alice wants to receive a 5000 sat payment from CoffeeCo. She
+authenticates with a lightweight Schnorr proof — no ZK proof needed this time.
+
+### Step 1: Create Schnorr proof
+
+```
+t ←$ Z_q
+R = t · g
+e = SHA256("CRS-ASC-schnorr-child-auth" || g || ϕ_1 || R)
+s = t + e · csk_1
+
+Proof = (R, s)
+```
+
+### Step 2: Submit payment request
+
+```
+SubmitPaymentRequest {
+    amount: 5000,
+    pseudonym: ϕ_1,     # 33 bytes
+    proof_r: R,          # 33 bytes (nonce commitment)
+    proof_s: s           # 32 bytes (Schnorr response)
+}
+```
+
+### Step 3: Merchant processes the request
+
+CoffeeCo:
+1. Verifies the Schnorr proof: checks `s·g == R + e·ϕ_1`
+2. Looks up `ϕ_1` in `registered_identities` → finds "alice"
+3. Derives a P2TR (Pay-to-Taproot) Bitcoin address from the pseudonym
+4. Returns:
+
+```
+PaymentRequestResponse {
+    address: "bc1p...",       # P2TR Bitcoin address
+    friendly_name: "alice"
+}
+```
+
+Alice can now receive 5000 sats at this address. The address is derived
+deterministically from her pseudonym, so it's consistent across requests
+to the same merchant.
+
+---
+
+## Cross-Merchant Unlinkability
+
+If Alice also registers with BookStore (merchant 2), she derives completely
+different cryptographic identifiers:
+
+```
+# CoffeeCo (merchant 1):
+csk_1 = HKDF(r, "CoffeeCo")  →  ϕ_1 = csk_1 · g
+s_1   = HKDF(sk, "CoffeeCo") →  nul_1 = s_1 · g
+
+# BookStore (merchant 2):
+csk_2 = HKDF(r, "BookStore")  →  ϕ_2 = csk_2 · g
+s_2   = HKDF(sk, "BookStore") →  nul_2 = s_2 · g
+```
+
+HKDF's pseudorandomness guarantee means:
+- `ϕ_1` and `ϕ_2` are computationally independent — cannot be linked
+- `nul_1` and `nul_2` are computationally independent — cannot be linked
+- The ZK proofs reveal nothing about Alice's index in the anonymity set
+
+**However**: the `friendly_name` "alice" is revealed to both merchants during
+Phase 3. If CoffeeCo and BookStore collude and compare their registration
+tables, they can match on the name. The cryptographic identifiers (pseudonyms,
+nullifiers) remain unlinkable, but the name field breaks full anonymity across
+merchants. This is a design trade-off — merchants need to know who they're
+paying.
 
 ---
 
 ## What each party learns
 
 | Party | Learns | Does NOT learn |
-|---|---|---|
-| CRS (public) | Group generators, service names | Nothing secret |
-| Registry (at registration) | Φ (commitment), all L nullifier scalars | sk, r, k, or which service Alice will use |
-| Bitcoin (on-chain) | Φ as a P2TR leaf key in the vtxo-tree | Nothing about the commitment's contents |
-| Service provider l (at auth) | `nul_l = s_l · g` (public nullifier for their service) | Nullifiers for other services, sk, k |
-| Two colluding services l, m | Their own `nul_l`, `nul_m` | Cannot link them — HKDF unlinkability is a protocol property |
+|-------|--------|----------------|
+| **Registry** | Φ (commitment), beneficiary name | sk, r, k, which merchant Alice will use |
+| **Bitcoin** (on-chain) | Φ as a P2TR leaf key in VTxO tree | Nothing about the commitment's contents |
+| **CoffeeCo** | ϕ_1 (pseudonym), nul_1, "alice" | Alice's index in the set, blinding key k, BookStore's identifiers |
+| **BookStore** | ϕ_2 (pseudonym), nul_2, "alice" | Alice's index in the set, blinding key k, CoffeeCo's identifiers |
+| **Two colluding merchants** | Both see "alice" — can match names | Cannot link ϕ_1 to ϕ_2 or nul_1 to nul_2 cryptographically |
 
 ---
 
-## Cross-service unlinkability — automatic, not manual
-
-In the CRS-ASC protocol, cross-service unlinkability is a **cryptographic
-guarantee**, not something the user has to manage manually:
-
-```
-s_1 = HKDF(sk, "twitter.com")  →  nul_1 = s_1 · g   (what Twitter sees)
-s_2 = HKDF(sk, "github.com")   →  nul_2 = s_2 · g   (what GitHub sees)
-```
-
-- Twitter sees `nul_1`, GitHub sees `nul_2` — two completely different points
-- Even if Twitter and GitHub collude and compare all their nullifiers across
-  all their users, they cannot determine that `nul_1` and `nul_2` came from
-  the same person. HKDF's security proof guarantees this.
-- Alice does NOT need separate key pairs per service — one master secret `sk`
-  handles all L services, yet produces L unlinkable identities
-
-Compare with the old protocol: there, Alice would need to manually generate a
-separate `(pub_key, blinding_key)` pair for every service relationship and
-register each one separately. With CRS-ASC, she registers once and gets
-automatic unlinkability for all L services built into the protocol.
-
----
-
-## Sybil resistance
+## Sybil Resistance
 
 Sybil resistance operates at two levels:
 
-### At registration (global)
-All L nullifiers are checked atomically. The same master secret `sk` always
-produces the same set of nullifiers, so a user cannot register twice.
+### Per merchant
+Each merchant stores seen public nullifiers. The same `sk` + same merchant
+always produces the same `nul_l`, so a beneficiary cannot register two payment
+identities with the same merchant.
 
-### Per service (local)
-Each service provider maintains a list of seen public nullifiers `nul_l = s_l · g`.
-The same user always produces the same `nul_l` for service l, so a user cannot
-create two accounts on the same service.
-
-The nullifier scalar `s_l` serves double duty:
-- **Sybil-resistance token**: unique per (master identity, service)
-- **Public authentication key**: the user can prove knowledge of `s_l`
+### Per anonymity set
+The commitment Φ is unique per beneficiary (different secrets produce different
+curve points). The registry rejects duplicate Φ values within a set.
 
 ---
 
-## Security properties
+## Security Properties
 
-### Why Eve cannot impersonate Alice
-
-| Eve's attempt | Result |
-|---|---|
-| Register with Alice's sk | All L nullifiers would match → **409 Conflict** |
-| Register with a different sk | Different nullifiers, different Φ — not Alice's identity |
-| Forge a proof for Alice's Φ | Requires knowing k and all s_l — discrete log is infeasible |
-| Replay Alice's proof to a different service | Different service sees different `nul_l` — proof doesn't transfer |
-
-### Binding property of the commitment
-
-Given `Φ = k·g + s_1·h_1 + ... + s_L·h_L`, the only way to produce a valid
-opening `(s_1', ..., s_L', k')` is if `(s_1', ..., s_L', k') = (s_1, ..., s_L, k)`
-— up to negligible probability under the discrete log assumption.
-
-This means: you cannot "open" position l to two different values. One master
-secret, one set of nullifiers, one identity per service — cryptographically enforced.
-
-### Blinding key security
-
-If Alice's blinding key `k` is ever exposed, her commitment Φ can be "opened" —
-an attacker who knows k and observes Φ could potentially recover the nullifier
-scalars. The blinding key must be kept secret and stored securely.
-
-### Bitcoin anchoring guarantees
-
-Once a sealed set is anchored on Bitcoin via a vtxo-tree:
-- **Immutability**: the set cannot be altered — the root transaction is
-  confirmed on Bitcoin's blockchain, backed by proof of work. Changing any
-  commitment would require re-mining blocks.
-- **Commitment locking**: each commitment Φ is the internal key of a P2TR
-  leaf output. To spend that output (claim the coins), a user must prove
-  they know the opening values `(k, s_1..s_L)` — this is where the ASC
-  zero-knowledge proof comes in.
-- **Efficiency**: one on-chain UTXO anchors 1024 identities, compared to
-  the ASC paper's approach of storing each identity in an Ethereum smart
-  contract (which costs gas per entry).
+| Attack | Result |
+|--------|--------|
+| Eve registers with Alice's sk | Same Φ — registry rejects duplicate commitment |
+| Eve forges a proof for Alice's Φ | Requires knowing k and all s_l — discrete log is infeasible |
+| Eve replays Alice's CoffeeCo proof to BookStore | Different service_index in Fiat-Shamir challenge — proof invalid |
+| Eve replays Alice's payment request | Same pseudonym verified, but only Alice's address is returned |
+| CoffeeCo tries to determine Alice's index | ZK proof reveals nothing about which of the 8 commitments is hers |
+| CoffeeCo + BookStore compare nullifiers | nul_1 ≠ nul_2 — HKDF makes them independent |
+| CoffeeCo + BookStore compare names | Both see "alice" — names are linkable by design |
 
 ---
 
-## Phase 3 — Alice authenticates with a service (service registration proof)
-
-Phase 3 builds on the master credential and registered identity to enable
-Alice to prove membership in her anonymity set and authenticate with a
-specific service — all without revealing which commitment is hers.
-
-### FriendlyName — human-readable identity bound to Φ
-
-Before or during credential creation, Alice can choose a **FriendlyName** —
-a human-readable identifier (max 255 bytes) that is cryptographically bound
-inside her commitment via a dedicated generator `h_name`:
+## Summary of the Flow
 
 ```
-name_scalar = SHA256(friendly_name)
-Φ = k·g + s_1·h_1 + ... + s_L·h_L + name_scalar·h_name
+Phase 0:  Admin registers merchants → creates set → CRS generated
+Phase 1:  Alice generates (sk, r, k) → computes Φ locally
+Phase 2:  Alice registers Φ → subscribes to stream → set finalized → VTxO tree
+Phase 3:  Alice derives (ϕ_1, nul_1) → generates ZK proof → submits to CoffeeCo
+Phase 4:  CoffeeCo verifies proof → stores identity → ready for payments
+Phase 5:  Alice creates Schnorr proof → CoffeeCo returns P2TR address
 ```
 
-The CRS provides `h_name = HashToCurve("CRS-ASC-generator-name")`, an
-independent NUMS generator alongside `g` and `h_1..h_L`. Once committed,
-the friendly name cannot be changed without breaking the cryptographic
-binding in Φ.
-
-### Child credentials — per-service authentication keys
-
-Alice derives a **child secret key** and **pseudonym** for each service `l`:
-
-```
-csk_l = HKDF(r, salt=v_l, info="CRS-ASC-child-secret-key")
-ϕ_l   = csk_l · g    (pseudonym — Alice's public identity at service l)
-```
-
-Key properties:
-- `r` (child randomness) is independent from `sk` (master secret) — auth
-  keys don't leak nullifier information
-- Each service gets a different `csk_l` because the salt changes
-- The pseudonym `ϕ_l` is unlinkable across services (same HKDF guarantee
-  as nullifiers)
-- Alice stores only `(sk, r, k)` (~96 bytes); pseudonyms are recomputed
-  on demand
-
-### Service registration proof — composite membership + nullifier authenticity
-
-To authenticate with service `l`, Alice generates a **ServiceRegistrationProof**
-that simultaneously proves two things:
-
-1. **Membership**: "I know the opening of one of the 1024 commitments in
-   anonymity set `Λ_{d̂}`, without revealing which one."
-2. **Nullifier authenticity**: "The public nullifier `nul_l = s_l · g` I'm
-   presenting is correctly derived from my committed identity."
-
-The proof works by **shifting** each commitment in the anonymity set:
-
-```
-D[i] = Φ_i - s_l·h_l    for all i = 1..1024
-```
-
-At Alice's index `j`, this cancels the `l`-th term:
-
-```
-D[j] = k·g + Σ_{m≠l} s_m·h_m + name_scalar·h_name
-```
-
-The adapted Bootle/Groth proof then proves knowledge of the opening
-`(k, s_1, ..., s_{l-1}, s_{l+1}, ..., s_L, name_scalar)` to one of the
-1024 shifted commitments `D[i]`, using **L+1 active generators**:
-`g`, `h_m` for `m ≠ l`, and `h_name`.
-
-A **Schnorr proof `π_value`** additionally proves that `nul_l = s_l · g`
-is correctly formed: the prover shows knowledge of `s_l` such that the
-publicly revealed `nul_l` equals `s_l` times the base generator.
-
-### Proof structure and size
-
-```
-ServiceRegistrationProof {
-  π_membership:
-    A, B, C, D     — 4 aggregate bit commitments (132 bytes)
-    E_poly         — M=10 polynomial decomposition points (330 bytes)
-    f              — M=10 scalar evaluations (320 bytes)
-    z_a, z_c       — 2 bit blinding responses (64 bytes)
-    z_responses    — (L+1) multi-generator polynomial responses
-
-  π_value (Schnorr):
-    schnorr_r      — nonce commitment R = t·g (33 bytes)
-    schnorr_s      — response s = t + e·s_l (32 bytes)
-}
-
-Total: 911 + (L+1)×32 bytes
-Example: L=4 providers → 911 + 160 = 1,071 bytes
-```
-
-The Fiat-Shamir challenge binds the proof to the CRS, pseudonym, public
-nullifier, service index, set ID, shifted anonymity set, and all
-commitments — preventing replay across services or sets.
-
-### What the service provider sees
-
-After verification, service `l` learns:
-- `nul_l = s_l · g` — Alice's unique nullifier for this service (Sybil resistance)
-- `ϕ_l = csk_l · g` — Alice's pseudonym (her public identity at service `l`)
-- That Alice is a valid member of anonymity set `d̂`
-
-Service `l` does **not** learn:
-- Which of the 1024 commitments is Alice's
-- Alice's nullifiers for any other service
-- Alice's blinding key `k`, master secret `sk`, or friendly name
-
----
-
-## What veiled provides
-
-| Property | Status |
-|---|---|
-| CRS with independent generators via HashToCurve | Implemented (Phase 0) |
-| Multi-value Pedersen commitment `Φ = k·g + Σ s_l·h_l + name_scalar·h_name` | Implemented (Phase 0) |
-| HKDF per-verifier nullifier derivation | Implemented (Phase 1) |
-| Public nullifiers `nul_l = s_l · g` | Implemented (Phase 1) |
-| MasterCredential `(Φ, sk, r, k)` | Implemented (Phase 1) |
-| FriendlyName bound in commitment via `h_name` | Implemented (Phase 1) |
-| RegisteredIdentity with frozen anonymity set | Implemented (Phase 2) |
-| Multi-nullifier atomic registration | Implemented (Phase 2) |
-| Bitcoin on-chain anchoring via vtxo-tree | Implemented (Phase 2) |
-| Adapted Bootle/Groth proof for multi-value commitments | Implemented (Phase 3) |
-| Service-specific child credentials and pseudonyms | Implemented (Phase 3) |
-| Composite proof (membership + nullifier authenticity via Schnorr `π_value`) | Implemented (Phase 3) |
-| Automatic cross-service unlinkability | Implemented (Phases 1–3) |
-
-## What veiled does NOT yet provide
-
-| Property | Status |
-|---|---|
-| Phase 4: Full anonymous authentication protocol | Planned |
-| Proof expiry / revocation | Not in scope |
+After Phase 3, Alice can authenticate to CoffeeCo indefinitely using
+lightweight Schnorr proofs (Phase 5) — no further interaction with the
+registry is required.

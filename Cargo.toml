@@ -17,7 +17,7 @@ path = "src/bin/beneficiary.rs"
 
 [[bin]]
 name = "merchant"
-path = "src/bin/merchant.rs"
+path = "src/bin/merchant/main.rs"
 
 [dependencies]
 # Core
@@ -29,24 +29,21 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 hkdf = "0.12"
 
 # Registry
-axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
-tower-http = { version = "0.5", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
 bitcoin = { version = "0.32", features = ["serde", "rand-std"] }
 tonic = "0.12"
 prost = "0.13"
-
-[build-dependencies]
-tonic-build = "0.12"
+tokio-stream = "0.1"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rand = "0.8"
+
+[build-dependencies]
+tonic-build = "0.12"
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }

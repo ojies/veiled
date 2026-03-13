@@ -1,3 +1,4 @@
+use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::transport::Server;
@@ -6,6 +7,14 @@ use tracing_subscriber::{fmt, EnvFilter};
 use veiled::registry::pb::registry_server::RegistryServer;
 use veiled::registry::service::RegistryService;
 use veiled::registry::store::RegistryStore;
+
+#[derive(Parser)]
+#[command(name = "veiled-registry-grpc", about = "Veiled Registry gRPC server")]
+struct Args {
+    /// Address to listen on
+    #[arg(short, long, default_value = "[::1]:50051")]
+    listen: String,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,14 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let addr = "[::1]:50051".parse()?;
-    let beneficiary_capacity = 1024;
-    let merchant_capacity = 3;
+    let args = Args::parse();
+    let addr = args.listen.parse()?;
 
-    let store = Arc::new(Mutex::new(RegistryStore::new(
-        beneficiary_capacity,
-        merchant_capacity,
-    )));
+    let store = Arc::new(Mutex::new(RegistryStore::new()));
     let registry_service = RegistryService::new(store);
 
     info!("Veiled gRPC Registry listening on {}", addr);
