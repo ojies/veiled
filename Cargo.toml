@@ -19,6 +19,10 @@ path = "src/bin/beneficiary.rs"
 name = "merchant"
 path = "src/bin/merchant/main.rs"
 
+[[bin]]
+name = "demo"
+path = "demo/simulate.rs"
+
 [dependencies]
 # Core
 sha2 = "0.10"

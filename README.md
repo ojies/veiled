@@ -226,6 +226,19 @@ cargo run --bin beneficiary -- \
 
 Options: `--merchant-name <name>` overrides registry lookup for merchant name.
 
+### Run the demo
+
+A self-contained simulation that starts an in-process registry, 3 merchant
+servers, and runs 8 beneficiaries through the full Phase 0-5 protocol:
+
+```bash
+cargo run --bin demo --release
+```
+
+Demonstrates: credential creation, registration, set finalization, ZK proof
+generation/verification, Schnorr authentication, P2TR address derivation,
+and cross-merchant pseudonym unlinkability.
+
 ---
 
 ## Testing

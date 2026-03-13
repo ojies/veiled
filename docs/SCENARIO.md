@@ -410,3 +410,18 @@ Phase 5:  Alice creates Schnorr proof → CoffeeCo returns P2TR address
 After Phase 3, Alice can authenticate to CoffeeCo indefinitely using
 lightweight Schnorr proofs (Phase 5) — no further interaction with the
 registry is required.
+
+---
+
+## Running the Demo
+
+To see all phases in action with 3 merchants (CoffeeCo, BookStore, TechMart)
+and 8 beneficiaries (Alice through Heidi):
+
+```bash
+cargo run --bin demo --release
+```
+
+The demo starts an in-process registry and merchant servers, runs all 8
+beneficiaries through Phases 1-5, and demonstrates cross-merchant pseudonym
+unlinkability with Alice registered at all three merchants.
