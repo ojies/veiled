@@ -57,7 +57,9 @@ fn full_protocol_flow_phases_0_through_5() {
     // 8 beneficiaries, each created with Beneficiary::new().
     // Φ = k·g + s_1·h_1 + ... + s_L·h_L + name_scalar·h_name
 
-    let beneficiary_names = ["alice", "bob", "carol", "dave", "eve", "frank", "grace", "heidi"];
+    let beneficiary_names = [
+        "alice", "bob", "carol", "dave", "eve", "frank", "grace", "heidi",
+    ];
 
     let mut beneficiaries: Vec<Beneficiary> = beneficiary_names
         .iter()
@@ -129,10 +131,8 @@ fn full_protocol_flow_phases_0_through_5() {
     assert_eq!(payment_reg.set_id, set_id);
     assert_eq!(payment_reg.friendly_name, "alice");
 
-   
     // Registration is stored on the beneficiary.
     assert!(beneficiaries[0].registrations.contains_key(&merchant_1_id));
-
 
     // ── Phase 4: Merchant receives and verifies registration ─────────────────
     //
@@ -147,7 +147,9 @@ fn full_protocol_flow_phases_0_through_5() {
 
     assert_eq!(pseudonym, payment_reg.pseudonym);
     assert_eq!(merchant_1.registered_identities.len(), 1);
-    assert!(merchant_1.registered_identities.contains_key(&payment_reg.pseudonym));
+    assert!(merchant_1
+        .registered_identities
+        .contains_key(&payment_reg.pseudonym));
 
     // Replay: same registration again → pseudonym already registered.
     let replay_err = merchant_1
