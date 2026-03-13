@@ -106,8 +106,6 @@ fn full_protocol_flow_phases_0_through_5() {
     );
     assert!(taproot_commitment.tx.output[0].script_pubkey.is_p2tr());
 
-   
-    
     // All beneficiaries register with the anonymity set (Phase 2 complete).
     let set_id = registry.set_id;
     for ben in &mut beneficiaries {
@@ -135,7 +133,7 @@ fn full_protocol_flow_phases_0_through_5() {
     // Registration is stored on the beneficiary.
     assert!(beneficiaries[0].registrations.contains_key(&merchant_1_id));
 
-  
+
     // ── Phase 4: Merchant receives and verifies registration ─────────────────
     //
     // Merchant 1 receives (ϕ, nul_l, π, d̂, "alice") and verifies the proof.

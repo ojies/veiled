@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package registry;
+
+service Registry {
+  rpc RegisterMerchant (MerchantRequest) returns (MerchantResponse);
+  rpc RegisterBeneficiary (BeneficiaryRequest) returns (BeneficiaryResponse);
+  rpc FinalizeSet(FinalizeSetRequest) returns (FinalizeSetResponse);
+}
+
+message FinalizeSetRequest {
+  uint64 set_id = 1;
+}
+
+message FinalizeSetResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message MerchantRequest {
+  string name = 1;
+  string origin = 2;
+  bytes credential_generator = 3; // 33-byte compressed pk
+  string email = 4;
+  string phone = 5;
+  string address = 6;
+}
+
+message MerchantResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message BeneficiaryRequest {
+  uint64 set_id = 1;
+  bytes phi = 2; // 33-byte commitment
+  string name = 3;
+  string email = 4;
+  string phone = 5;
+  string address = 6;
+  repeated string merchant_names = 7;
+}
+
+message BeneficiaryResponse {
+  bool success = 1;
+  string message = 2;
+  uint32 index = 3;
+}

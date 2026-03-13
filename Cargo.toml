@@ -8,12 +8,8 @@ name = "veiled"
 path = "src/lib.rs"
 
 [[bin]]
-name = "veiled-registry"
-path = "src/bin/registry.rs"
-
-[[bin]]
-name = "veiled-cli"
-path = "src/bin/cli.rs"
+name = "veiled-registry-grpc"
+path = "src/bin/registry_grpc.rs"
 
 [dependencies]
 # Core
@@ -33,6 +29,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 bitcoin = { version = "0.32", features = ["serde", "rand-std"] }
+tonic = "0.12"
+prost = "0.13"
+
+[build-dependencies]
+tonic-build = "0.12"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
