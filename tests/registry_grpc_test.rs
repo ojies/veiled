@@ -35,6 +35,8 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
         origin: "http://test.com".to_string(),
         email: "merchant@example.com".to_string(),
         phone: "+987654321".to_string(),
+        funding_txid: vec![0xaa; 32],
+        funding_vout: 0,
     };
     client.register_merchant(merchant_req).await?;
 
@@ -44,6 +46,8 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
         origin: "http://test.com".to_string(),
         email: "dup@example.com".to_string(),
         phone: "0".to_string(),
+        funding_txid: vec![0xaa; 32],
+        funding_vout: 0,
     };
     let dup_err = client.register_merchant(dup_merchant_req).await;
     assert!(dup_err.is_err());
@@ -56,6 +60,14 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(merchants_res.merchants.len(), 1);
     assert_eq!(merchants_res.merchants[0].name, "Test Merchant");
     assert_eq!(merchants_res.merchants[0].credential_generator.len(), 33);
+
+    // 1.3 GetRegistryAddress with set_id=0 (global wallet address for merchants)
+    let global_addr_res = client
+        .get_registry_address(GetRegistryAddressRequest { set_id: 0 })
+        .await?
+        .into_inner();
+    assert!(global_addr_res.address.starts_with("bcrt1p"), "expected bcrt1p address, got: {}", global_addr_res.address);
+    assert_eq!(global_addr_res.internal_key.len(), 32);
 
     // 2. Create Set (Phase 0: CRS setup)
     let create_set_req = CreateSetRequest {
@@ -173,14 +185,9 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!anon_set.finalized);
     assert_eq!(anon_set.commitments.len(), 2);
 
-    // 5. Finalize Set (builds VTxO tree)
+    // 5. Finalize Set (creates Taproot commitment)
     let finalize_res = client
-        .finalize_set(FinalizeSetRequest {
-            set_id: 1,
-            sats_per_user: 2_000,
-            funding_txid: vec![0xaa; 32],
-            funding_vout: 0,
-        })
+        .finalize_set(FinalizeSetRequest { set_id: 1 })
         .await?
         .into_inner();
     assert!(finalize_res.message.contains("finalized"));
@@ -194,12 +201,7 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
 
     // 5.2 Finalize non-existent set should fail
     assert!(client
-        .finalize_set(FinalizeSetRequest {
-            set_id: 99,
-            sats_per_user: 2_000,
-            funding_txid: vec![0xaa; 32],
-            funding_vout: 0,
-        })
+        .finalize_set(FinalizeSetRequest { set_id: 99 })
         .await
         .is_err());
 
@@ -268,12 +270,7 @@ async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     client
-        .finalize_set(FinalizeSetRequest {
-            set_id: 2,
-            sats_per_user: 2_000,
-            funding_txid: vec![0xbb; 32],
-            funding_vout: 0,
-        })
+        .finalize_set(FinalizeSetRequest { set_id: 2 })
         .await?;
 
     // Subscriber should receive the finalized set

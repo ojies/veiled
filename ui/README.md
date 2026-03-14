@@ -76,7 +76,7 @@ The **faucet** button mines regtest blocks to fund wallets instantly.
 | `/api/wallet/tx` | GET | Transaction details |
 | `/api/beneficiary/credential` | POST | Create ZK credential |
 | `/api/beneficiary/register` | POST | Pay fee + register with anonymity set |
-| `/api/beneficiary/finalize` | POST | Fund VTxO tree, finalize, sign + broadcast |
+| `/api/beneficiary/finalize` | POST | Fund Taproot commitment, finalize set |
 | `/api/beneficiary/payment-id` | POST | Register payment identity (ZK proof) |
 | `/api/beneficiary/payment` | POST | Request payment from merchant (Schnorr proof) |
 | `/api/beneficiary/incoming` | GET | Check incoming payments to beneficiary |

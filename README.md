@@ -40,7 +40,7 @@ full specification:
 2. **Credential Creation** — Beneficiary generates secrets locally, computes a
    multi-value Pedersen commitment Φ packing per-merchant nullifiers
 3. **Registration** — Φ is registered in an anonymity set, which is sealed and
-   anchored on Bitcoin via a VTxO tree of P2TR outputs
+   anchored on Bitcoin via a Taproot commitment
 4. **Payment Identity** — Beneficiary derives an unlinkable pseudonym per
    merchant and proves set membership via a Bootle/Groth ZK proof
 5. **Merchant Verification** — Merchant verifies the proof, checks nullifier
@@ -67,7 +67,7 @@ full specification:
 │  │                 │  │ (crypto)  │  │ (BDK/BIP86)  │                 │
 │  │ Merchant pool   │  └───────────┘  └──────┬───────┘                 │
 │  │ Anonymity sets  │                        │ RPC                     │
-│  │ CRS + VTxO tree │                        ▼                         │
+│  │ CRS + Taproot   │                        ▼                         │
 │  └────────┬────────┘             ┌──────────────────┐                 │
 │           │ gRPC                 │ bitcoind          │                 │
 │           ▼                      │ (regtest :18443)  │                 │
@@ -128,6 +128,8 @@ Works with Docker or Podman (images use `docker.io/` prefix).
 
 ```bash
 cargo run --bin veiled-registry-grpc
+# INFO: Opening database at registry.db
+# INFO: Wallet address: bcrt1p...
 # INFO: Veiled gRPC Registry listening on [::1]:50051
 ```
 
@@ -138,7 +140,9 @@ cargo run --bin merchant -- \
   --name "Merchant1" \
   --origin "https://merchant1.com" \
   --set-id 1 \
-  --listen "[::1]:50061"
+  --listen "[::1]:50061" \
+  --funding-txid <64-hex-char-txid> \
+  --funding-vout 0
 ```
 
 #### Run a beneficiary
@@ -147,6 +151,8 @@ cargo run --bin merchant -- \
 cargo run --bin beneficiary -- \
   --name "alice" \
   --set-id 1 \
+  --funding-txid <64-hex-char-txid> \
+  --funding-vout 0 \
   --merchant-server "http://[::1]:50061" \
   --merchant-id 1 \
   --payment-amount 5000
@@ -185,7 +191,7 @@ Test coverage:
   proof; full Phase 0-5 flow test
 - **registry gRPC**: merchant registration + duplicate rejection; set
   creation + CRS generation; beneficiary registration + capacity enforcement;
-  set finalization + VTxO tree; streaming subscription (before/after
+  set finalization + Taproot commitment; streaming subscription (before/after
   finalization); error cases (unknown set, duplicate beneficiary)
 
 ---
@@ -197,7 +203,7 @@ Test coverage:
 - [x] HKDF per-merchant nullifier derivation (Phase 0)
 - [x] MasterCredential creation (Phase 1)
 - [x] Beneficiary registration + anonymity set finalization (Phase 2)
-- [x] Bitcoin anchoring via VTxO tree (Phase 2)
+- [x] Bitcoin anchoring via Taproot commitment (Phase 2)
 - [x] Server-streaming subscription for set finalization (Phase 2)
 - [x] Payment identity registration with ZK proof (Phase 3)
 - [x] Merchant verification of ZK proofs (Phase 4)
@@ -210,8 +216,10 @@ Test coverage:
 - [x] `veiled-wallet` BDK-based wallet binary (BIP86 P2TR, local key management, no bitcoind wallets)
 - [x] Full protocol simulation (`demo`) with 3 merchants and 8 beneficiaries
 - [x] On-chain registration fee verification (beneficiary + merchant)
-- [x] VTxO tree signing and broadcast (aggregate key, `root_tx` + `fanout_tx`)
+- [x] Self-funded Taproot commitment transaction (aggregates beneficiary payment UTXOs)
 - [x] Dynamic fee configuration via registry `GetFees` RPC
+- [x] Registry wallet (secp256k1 keypair persisted in SQLite, P2TR address for fee collection)
+- [x] Persistent storage for registry state (SQLite: merchants, sets, commitments, wallet key)
 
 ### Phase 3-4 improvements (Payment Identity Registration)
 - [ ] Per-merchant nullifier duplicate rejection in the merchant service (currently verified in core but not enforced at the gRPC layer)
@@ -223,10 +231,9 @@ Test coverage:
 - [ ] Payment amount limits and rate limiting per pseudonym
 - [ ] Payment receipt / proof-of-payment from merchant back to beneficiary
 - [ ] Multi-payment support — multiple sequential payments under the same pseudonym without re-registration
-- [ ] On-chain P2TR spending path — enable beneficiaries to claim VTxO tree leaf outputs using their credential
+- [ ] On-chain P2TR spending path — enable beneficiaries to claim Taproot commitment outputs using their credential
 
 ### Infrastructure
-- [ ] Persistent storage for registry state (SQLite or similar)
 - [ ] TLS for gRPC connections
 - [ ] Credential revocation / proof expiry
 - [ ] Anonymity set size scaling beyond current capacity

@@ -12,8 +12,8 @@ use veiled::core::request::create_payment_request;
 use veiled::core::types::{Commitment, Name};
 use veiled::registry::pb::registry_client::RegistryClient;
 use veiled::registry::pb::{
-    BeneficiaryRequest, GetAnonymitySetRequest, GetCrsRequest, GetMerchantsRequest,
-    GetVtxoTreeRequest,
+    BeneficiaryRequest, GetAnonymitySetRequest, GetCrsRequest, GetFeesRequest,
+    GetMerchantsRequest, GetRegistryAddressRequest,
 };
 
 use merchant_pb::merchant_service_client::MerchantServiceClient;
@@ -49,6 +49,14 @@ struct Args {
     /// Amount in sats for payment request (triggers Phase 5)
     #[arg(long)]
     payment_amount: Option<u64>,
+
+    /// Funding transaction ID (hex-encoded, 32 bytes) proving payment to registry
+    #[arg(long)]
+    funding_txid: Option<String>,
+
+    /// Funding output index within the payment transaction
+    #[arg(long, default_value = "0")]
+    funding_vout: u32,
 }
 
 #[tokio::main]
@@ -74,7 +82,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let crs = Crs::from_bytes(&crs_res.crs_bytes)?;
     info!("Fetched CRS for set {}", args.set_id);
 
-    // 2. Create beneficiary credential locally (Phase 1)
+    // 2. Query registry address and fees
+    let addr_res = registry_client
+        .get_registry_address(GetRegistryAddressRequest {
+            set_id: args.set_id,
+        })
+        .await?
+        .into_inner();
+    let fees_res = registry_client.get_fees(GetFeesRequest {}).await?.into_inner();
+    info!(
+        "Registry address for set {}: {}",
+        args.set_id, addr_res.address
+    );
+    info!(
+        "Required fee: {} sats (pay to address above)",
+        fees_res.beneficiary_fee
+    );
+
+    // 3. Create beneficiary credential locally (Phase 1)
     let mut beneficiary = Beneficiary::new(&crs, &args.name);
     info!(
         "Created credential for '{}', phi: {:?}",
@@ -82,7 +107,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &beneficiary.credential.phi.0[..4]
     );
 
-    // 3. Register phi with the registry (Phase 2)
+    // 4. Register phi with the registry (Phase 2)
+    let funding_txid = match &args.funding_txid {
+        Some(hex) => {
+            let bytes = hex::decode(hex)
+                .map_err(|e| format!("Invalid funding_txid hex: {}", e))?;
+            if bytes.len() != 32 {
+                return Err("funding_txid must be 32 bytes (64 hex chars)".into());
+            }
+            bytes
+        }
+        None => {
+            eprintln!(
+                "ERROR: No funding transaction provided.\n\
+                 Pay {} sats to {} and re-run with:\n  \
+                 --funding-txid <txid_hex> --funding-vout <vout>",
+                fees_res.beneficiary_fee, addr_res.address
+            );
+            std::process::exit(1);
+        }
+    };
+
     let ben_res = registry_client
         .register_beneficiary(BeneficiaryRequest {
             set_id: args.set_id,
@@ -90,8 +135,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             name: args.name.clone(),
             email: String::new(),
             phone: String::new(),
-            funding_txid: vec![0x00; 32],
-            funding_vout: 0,
+            funding_txid,
+            funding_vout: args.funding_vout,
         })
         .await?
         .into_inner();
@@ -100,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ben_res.index, ben_res.message
     );
 
-    // 4. Subscribe and wait for finalized anonymity set (Phase 2)
+    // 5. Subscribe and wait for finalized anonymity set (Phase 2)
     info!("Subscribing to set {} finalization...", args.set_id);
     let response = registry_client
         .subscribe_set_finalization(GetAnonymitySetRequest {
@@ -128,7 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         anonymity_set.len()
     );
 
-    // 5. Register with the anonymity set locally (Phase 2 complete)
+    // 6. Register with the anonymity set locally (Phase 2 complete)
     // Convert u64 set_id to [u8; 32] for core API (placeholder until finalization provides Merkle root)
     let mut set_id_bytes = [0u8; 32];
     set_id_bytes[..8].copy_from_slice(&args.set_id.to_le_bytes());
@@ -136,19 +181,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(
         "Registered locally at index {}",
         beneficiary.index.unwrap()
-    );
-
-    // 6. Fetch VTxO tree (Phase 2)
-    let vtxo_res = registry_client
-        .get_vtxo_tree(GetVtxoTreeRequest {
-            set_id: args.set_id,
-        })
-        .await?
-        .into_inner();
-    info!(
-        "Downloaded VTxO tree: root_tx={} bytes, fanout_tx={} bytes",
-        vtxo_res.root_tx.len(),
-        vtxo_res.fanout_tx.len()
     );
 
     // 7. Optionally connect to merchant for Phase 3-5

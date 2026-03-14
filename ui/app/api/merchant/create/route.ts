@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { spawn } from "child_process";
 import path from "path";
 import { getState, addMerchantProcess } from "@/lib/state";
-import { createWallet, getBalance, send, faucet } from "@/lib/wallet";
+import { createWallet, getBalance, send, faucet, getTx } from "@/lib/wallet";
 import { getRegistryClient, grpcCall } from "@/lib/grpc";
 import {
   MERCHANT_START_PORT,
@@ -45,10 +45,14 @@ export async function POST(request: Request) {
       });
     }
 
-    // Fetch merchant fee from registry
+    // Fetch merchant fee and registry address
     const registry = getRegistryClient();
-    const feesResp: any = await grpcCall(registry, "GetFees", {});
+    const [feesResp, addrResp]: any[] = await Promise.all([
+      grpcCall(registry, "GetFees", {}),
+      grpcCall(registry, "GetRegistryAddress", { set_id: 0 }),
+    ]);
     const merchantFee = feesResp.merchant_fee;
+    const registryAddress = addrResp.address;
 
     // Create wallet for this merchant
     const walletName = `merchant-${name.toLowerCase().replace(/\s+/g, "-")}`;
@@ -58,9 +62,23 @@ export async function POST(request: Request) {
     faucet(wallet.address, 1);
     const dummyWallet = createWallet("faucet-miner");
     faucet(dummyWallet.address, MATURITY_BLOCKS);
-    if (state.registry_address) {
-      send(walletName, state.registry_address, merchantFee);
-      faucet(dummyWallet.address, 1);
+
+    // Pay merchant registration fee to registry
+    const sendResult = send(walletName, registryAddress, merchantFee);
+    const fundingTxid = sendResult.txid;
+    faucet(dummyWallet.address, 1);
+
+    // Find the correct vout (the output paying the registry address)
+    const txInfo = getTx(fundingTxid);
+    let fundingVout = 0;
+    if (txInfo.vout) {
+      for (let i = 0; i < txInfo.vout.length; i++) {
+        const output = txInfo.vout[i];
+        if (output.scriptPubKey?.address === registryAddress) {
+          fundingVout = i;
+          break;
+        }
+      }
     }
 
     // Find available port
@@ -76,6 +94,8 @@ export async function POST(request: Request) {
         "--listen", listenAddr,
         "--set-id", String(state.set_id),
         "--registry-server", REGISTRY_SERVER,
+        "--funding-txid", fundingTxid,
+        "--funding-vout", String(fundingVout),
       ],
       {
         stdio: ["ignore", "pipe", "pipe"],

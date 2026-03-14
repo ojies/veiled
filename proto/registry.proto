@@ -13,9 +13,7 @@ service Registry {
   rpc GetMerchants (GetMerchantsRequest) returns (GetMerchantsResponse);
   rpc GetCrs (GetCrsRequest) returns (GetCrsResponse);
   rpc GetAnonymitySet (GetAnonymitySetRequest) returns (GetAnonymitySetResponse);
-  rpc GetVtxoTree (GetVtxoTreeRequest) returns (GetVtxoTreeResponse);
   rpc GetRegistryAddress (GetRegistryAddressRequest) returns (GetRegistryAddressResponse);
-  rpc GetAggregateAddress (GetAggregateAddressRequest) returns (GetAggregateAddressResponse);
   rpc GetFees (GetFeesRequest) returns (GetFeesResponse);
 
   // Subscriptions
@@ -29,6 +27,8 @@ message MerchantRequest {
   string origin = 2;
   string email = 3;
   string phone = 4;
+  bytes funding_txid = 5;  // 32-byte txid of payment tx
+  uint32 funding_vout = 6; // output index within payment tx
 }
 
 message MerchantResponse {
@@ -63,15 +63,10 @@ message BeneficiaryResponse {
 
 message FinalizeSetRequest {
   uint64 set_id = 1;
-  uint64 sats_per_user = 2;
-  bytes funding_txid = 3;  // 32-byte txid
-  uint32 funding_vout = 4;
 }
 
 message FinalizeSetResponse {
   string message = 1;
-  string root_txid = 2;
-  string fanout_txid = 3;
 }
 
 // ── Queries ────────────────────────────────────────────────
@@ -107,15 +102,6 @@ message GetAnonymitySetResponse {
   uint32 capacity = 4;
 }
 
-message GetVtxoTreeRequest {
-  uint64 set_id = 1;
-}
-
-message GetVtxoTreeResponse {
-  bytes root_tx = 1;   // Bitcoin consensus-encoded transaction
-  bytes fanout_tx = 2; // Bitcoin consensus-encoded transaction
-}
-
 message GetRegistryAddressRequest {
   uint64 set_id = 1;
 }
@@ -123,15 +109,6 @@ message GetRegistryAddressRequest {
 message GetRegistryAddressResponse {
   string address = 1;       // P2TR bech32m address (bcrt1p... on regtest)
   bytes internal_key = 2;   // 32-byte x-only public key
-}
-
-message GetAggregateAddressRequest {
-  uint64 set_id = 1;
-}
-
-message GetAggregateAddressResponse {
-  string address = 1;       // P2TR bech32m address for the aggregate key
-  bytes aggregate_key = 2;  // 32-byte x-only aggregate public key
 }
 
 message GetFeesRequest {}

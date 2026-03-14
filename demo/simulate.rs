@@ -23,7 +23,7 @@ use veiled::registry::pb::registry_client::RegistryClient;
 use veiled::registry::pb::registry_server::RegistryServer;
 use veiled::registry::pb::{
     BeneficiaryRequest, CreateSetRequest, FinalizeSetRequest, GetAnonymitySetRequest,
-    GetCrsRequest, GetVtxoTreeRequest, MerchantRequest,
+    GetCrsRequest, MerchantRequest,
 };
 use veiled::registry::service::RegistryService;
 use veiled::registry::store::{FeeConfig, RegistryStore};
@@ -114,6 +114,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 origin: m.origin.into(),
                 email: format!("pay@{}", m.name.to_lowercase()),
                 phone: "".into(),
+                funding_txid: vec![0xaa; 32],
+                funding_vout: 0,
             })
             .await?;
         step(&format!("Registered merchant: {}", m.name));
@@ -213,14 +215,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stream.message().await.unwrap().unwrap()
     });
 
-    step("Admin finalizing set #1...");
+    step("Admin finalizing set #1 (demo: no RPC, commitment tx not broadcast)...");
     client
-        .finalize_set(FinalizeSetRequest {
-            set_id: 1,
-            sats_per_user: 2_000,
-            funding_txid: vec![0xaa; 32],
-            funding_vout: 0,
-        })
+        .finalize_set(FinalizeSetRequest { set_id: 1 })
         .await?;
 
     let finalized =
@@ -249,16 +246,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             beneficiaries[i].index.unwrap()
         ));
     }
-
-    let vtxo = client
-        .get_vtxo_tree(GetVtxoTreeRequest { set_id: 1 })
-        .await?
-        .into_inner();
-    step(&format!(
-        "VTxO tree downloaded: root_tx={} bytes, fanout_tx={} bytes",
-        vtxo.root_tx.len(),
-        vtxo.fanout_tx.len()
-    ));
 
     // Wait for merchant servers to receive finalized set
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -409,7 +396,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     separator("Simulation Complete");
     println!("  Merchants:      CoffeeCo, BookStore, TechMart");
     println!("  Beneficiaries:  alice, bob, carol, dave, eve, frank, grace, heidi");
-    println!("  Anonymity set:  8 commitments (2^3), sealed on Bitcoin VTxO tree");
+    println!("  Anonymity set:  8 commitments (2^3), sealed via Taproot commitment");
     println!("  Registrations:  13 payment identities across 3 merchants");
     println!("  Payments:       8 payment requests fulfilled with P2TR addresses");
     println!();

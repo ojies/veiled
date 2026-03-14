@@ -13,7 +13,7 @@ cryptographic details, see [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md).
 ## Cast
 
 - **Registry**: A gRPC server that manages merchants, anonymity sets, CRS
-  generation, and VTxO tree construction. Stateful but does not participate
+  generation, and Taproot commitment creation. Stateful but does not participate
   in the cryptographic protocol after setup.
 - **Merchant 1** ("CoffeeCo"): A payment provider that verifies beneficiary
   proofs and sends Bitcoin payments.
@@ -32,9 +32,21 @@ An admin starts the registry and registers the merchants:
 # Start registry
 veiled-registry-grpc --listen [::1]:50051
 
-# Register merchants (via gRPC client)
-RegisterMerchant { name: "CoffeeCo", origin: "https://coffeeco.com" }
-RegisterMerchant { name: "BookStore", origin: "https://bookstore.com" }
+# Query registry address for payment (no set needed yet)
+GetRegistryAddress { set_id: 0 } → { address: "bcrt1p...", internal_key: <32 bytes> }
+GetFees() → { beneficiary_fee: 2000, merchant_fee: 3000 }
+
+# Pay merchant registration fee (3,000 sats each), then register with payment proof
+<pay 3,000 sats to registry address for CoffeeCo>
+RegisterMerchant {
+    name: "CoffeeCo", origin: "https://coffeeco.com",
+    funding_txid: <32 bytes>, funding_vout: 0
+}
+<pay 3,000 sats to registry address for BookStore>
+RegisterMerchant {
+    name: "BookStore", origin: "https://bookstore.com",
+    funding_txid: <32 bytes>, funding_vout: 0
+}
 
 # Create anonymity set for 8 beneficiaries with both merchants
 CreateSet { set_id: 1, merchant_names: ["CoffeeCo", "BookStore"], beneficiary_capacity: 8 }
@@ -147,41 +159,20 @@ register their own commitments Φ_2 through Φ_8.
 
 ### Step 3: Set finalization
 
-The set is finalized once all 8 beneficiaries have registered. The funding
-UTXO is sent to the **aggregate address** — a P2TR address derived from all
-beneficiary pubkeys:
+Once all 8 beneficiaries have registered and paid, the set is finalized. No
+external funding is needed — the registry self-funds the commitment transaction
+from the beneficiary payment UTXOs it has collected.
 
 ```
-GetAggregateAddress { set_id: 1 } → { address: "bcrt1p...", aggregate_key: <32 bytes> }
-<send funding to aggregate address>
-
-FinalizeSet {
-    set_id: 1,
-    sats_per_user: 2_000,
-    funding_txid: <32-byte txid>,
-    funding_vout: 0
-}
-→ FinalizeSetResponse { root_txid: "abc...", fanout_txid: "def..." }
+FinalizeSet { set_id: 1 }
+→ FinalizeSetResponse { message: "Set 1 finalized" }
 ```
 
 The registry:
 1. **Seals** the anonymity set (frozen permanently — no additions or removals)
-2. Builds a **VTxO tree** from all 8 commitments
-3. **Signs** both `root_tx` and `fanout_tx` with the aggregate secret key
-4. **Broadcasts** both transactions to the Bitcoin network
-
-```
-            [Root TX]  ← broadcast on Bitcoin, spends funding UTXO
-           /          \
-     [Fanout TX]      ...   ← broadcast on Bitcoin, spends root output
-     /    |    \
-  [Φ_1] [Φ_2] ... [Φ_8]   ← 8 P2TR outputs, one per beneficiary
-```
-
-Each leaf is a P2TR output whose internal key is the beneficiary's Φ. This
-works because Φ is already a valid compressed secp256k1 public key.
-
-5. Notifies all subscribers via the streaming RPC
+2. Creates a **Taproot commitment** transaction self-funded from beneficiary
+   payment UTXOs, signs all inputs with BIP341 Taproot key-spend, and broadcasts
+3. Notifies all subscribers via the streaming RPC
 
 ### Step 4: Alice receives the finalized set
 
@@ -196,13 +187,7 @@ GetAnonymitySetResponse {
 }
 ```
 
-She registers locally, determining her index (0) in the set. She also fetches
-the VTxO tree:
-
-```
-GetVtxoTree { set_id: 1 }
-→ GetVtxoTreeResponse { root_tx: <bytes>, fanout_tx: <bytes> }
-```
+She registers locally, determining her index (0) in the set.
 
 Alice needs the full anonymity set stored locally because the Bootle/Groth ZK
 proof requires the prover to have the entire ring of commitments.
@@ -384,7 +369,7 @@ paying.
 | Party | Learns | Does NOT learn |
 |-------|--------|----------------|
 | **Registry** | Φ (commitment), beneficiary name | sk, r, k, which merchant Alice will use |
-| **Bitcoin** (on-chain) | Φ as a P2TR leaf key in VTxO tree | Nothing about the commitment's contents |
+| **Bitcoin** (on-chain) | Φ as part of a Taproot commitment | Nothing about the commitment's contents |
 | **CoffeeCo** | ϕ_1 (pseudonym), nul_1, "alice" | Alice's index in the set, blinding key k, BookStore's identifiers |
 | **BookStore** | ϕ_2 (pseudonym), nul_2, "alice" | Alice's index in the set, blinding key k, CoffeeCo's identifiers |
 | **Two colluding merchants** | Both see "alice" — can match names | Cannot link ϕ_1 to ϕ_2 or nul_1 to nul_2 cryptographically |
@@ -423,9 +408,9 @@ curve points). The registry rejects duplicate Φ values within a set.
 ## Summary of the Flow
 
 ```
-Phase 0:  Admin registers merchants → creates set → CRS generated
+Phase 0:  Merchants pay fee + register → admin creates set → CRS generated
 Phase 1:  Alice generates (sk, r, k) → computes Φ locally
-Phase 2:  Alice registers Φ → subscribes to stream → set finalized → VTxO tree
+Phase 2:  Alice registers Φ → subscribes to stream → set finalized → Taproot commitment
 Phase 3:  Alice derives (ϕ_1, nul_1) → generates ZK proof → submits to CoffeeCo
 Phase 4:  CoffeeCo verifies proof → stores identity → ready for payments
 Phase 5:  Alice creates Schnorr proof → CoffeeCo sends payment to P2TR address

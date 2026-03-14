@@ -11,10 +11,10 @@ routes via the Next.js web UI, and a wallet CLI binary.
 
 | RPC | Request | Response | Description |
 |-----|---------|----------|-------------|
-| `RegisterMerchant` | name, origin, email, phone | message | Register a merchant (rejects duplicates) |
+| `RegisterMerchant` | name, origin, email, phone, funding_txid, funding_vout | message | Pay fee + register a merchant (verifies payment on-chain, rejects duplicates) |
 | `CreateSet` | set_id, merchant_names, beneficiary_capacity, sats_per_user | message | Create anonymity set with CRS |
 | `RegisterBeneficiary` | set_id, phi (33 bytes), name, email, phone, funding_txid, funding_vout | message, index | Pay fee + register commitment in set (verifies payment on-chain) |
-| `FinalizeSet` | set_id, sats_per_user, funding_txid, funding_vout | message, root_txid, fanout_txid | Seal set, sign + broadcast VTxO tree |
+| `FinalizeSet` | set_id | message | Seal set, self-fund + sign + broadcast Taproot commitment from collected beneficiary UTXOs |
 
 ### Queries
 
@@ -23,9 +23,7 @@ routes via the Next.js web UI, and a wallet CLI binary.
 | `GetMerchants` | — | merchants[] (name, origin, credential_generator) | List all merchants |
 | `GetCrs` | set_id | crs_bytes | Get serialized CRS for a set |
 | `GetAnonymitySet` | set_id | commitments[], finalized, count, capacity | Get set status and commitments |
-| `GetVtxoTree` | set_id | root_tx, fanout_tx | Get consensus-encoded Bitcoin transactions |
-| `GetRegistryAddress` | set_id | address, internal_key | Get registry's P2TR payment address |
-| `GetAggregateAddress` | set_id | address, aggregate_key | Get aggregate P2TR address for VTxO funding |
+| `GetRegistryAddress` | set_id | address, internal_key | Get registry's P2TR payment address (`set_id=0` returns global address for merchant registration) |
 | `GetFees` | — | beneficiary_fee, merchant_fee | Get registration fee amounts (sats) |
 
 ### Streaming
@@ -55,6 +53,8 @@ message MerchantRequest {
   string origin = 2;
   string email = 3;
   string phone = 4;
+  bytes funding_txid = 5;  // 32-byte txid of fee payment
+  uint32 funding_vout = 6; // output index within fee payment tx
 }
 
 message CreateSetRequest {
@@ -76,25 +76,15 @@ message BeneficiaryRequest {
 
 message FinalizeSetRequest {
   uint64 set_id = 1;
-  uint64 sats_per_user = 2;
-  bytes funding_txid = 3;   // 32-byte txid
-  uint32 funding_vout = 4;
 }
 
 message FinalizeSetResponse {
   string message = 1;
-  string root_txid = 2;    // broadcast root transaction ID
-  string fanout_txid = 3;  // broadcast fanout transaction ID
 }
 
 message GetRegistryAddressResponse {
   string address = 1;       // P2TR bech32m address (bcrt1p... on regtest)
   bytes internal_key = 2;   // 32-byte x-only public key
-}
-
-message GetAggregateAddressResponse {
-  string address = 1;       // P2TR bech32m address for the aggregate key
-  bytes aggregate_key = 2;  // 32-byte x-only aggregate public key
 }
 
 message GetFeesResponse {
@@ -109,10 +99,6 @@ message GetAnonymitySetResponse {
   uint32 capacity = 4;
 }
 
-message GetVtxoTreeResponse {
-  bytes root_tx = 1;    // Bitcoin consensus-encoded transaction
-  bytes fanout_tx = 2;  // Bitcoin consensus-encoded transaction
-}
 ```
 
 ### Merchant messages
@@ -171,7 +157,7 @@ to gRPC services, Rust helper binaries, and the Bitcoin wallet.
 |-------|--------|-------|-------------|
 | `/api/beneficiary/credential` | POST | `{ name }` | Create ZK credential (master identity) |
 | `/api/beneficiary/register` | POST | `{ name }` | Pay fee + register Φ with the anonymity set |
-| `/api/beneficiary/finalize` | POST | `{ name }` | Fund VTxO tree, finalize set, sign + broadcast txs |
+| `/api/beneficiary/finalize` | POST | `{ name }` | Finalize set (self-funded Taproot commitment) |
 | `/api/beneficiary/payment-id` | POST | `{ beneficiary, merchant }` | Register payment identity (ZK proof) |
 | `/api/beneficiary/payment` | POST | `{ beneficiary, merchant, amount }` | Request payment from merchant (Schnorr proof) |
 | `/api/beneficiary/merchants` | GET | — | List registered merchants from registry |

@@ -73,6 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Opening database at {}", args.db_path);
     let store = RegistryStore::open(Some(Arc::new(rpc_client)), fee_config, &args.db_path)
         .map_err(|e| format!("Failed to initialize store: {e}"))?;
+    info!("Wallet address: {}", store.wallet_address);
     let store = Arc::new(Mutex::new(store));
     let registry_service = RegistryService::new(store);
 

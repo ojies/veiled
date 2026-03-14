@@ -12,7 +12,10 @@ use veiled::core::crs::Crs;
 use veiled::core::merchant::Merchant;
 use veiled::core::types::Commitment;
 use veiled::registry::pb::registry_client::RegistryClient;
-use veiled::registry::pb::{GetAnonymitySetRequest, GetCrsRequest, MerchantRequest};
+use veiled::registry::pb::{
+    GetAnonymitySetRequest, GetCrsRequest, GetFeesRequest, GetRegistryAddressRequest,
+    MerchantRequest,
+};
 
 use pb::merchant_service_server::MerchantServiceServer;
 use service::MerchantGrpcService;
@@ -39,6 +42,14 @@ struct Args {
     /// Set ID to serve
     #[arg(short, long)]
     set_id: u64,
+
+    /// Funding transaction ID (hex-encoded, 32 bytes) proving payment to registry
+    #[arg(long)]
+    funding_txid: Option<String>,
+
+    /// Funding output index within the payment transaction
+    #[arg(long, default_value = "0")]
+    funding_vout: u32,
 }
 
 #[tokio::main]
@@ -51,9 +62,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-    // 1. Register with the registry
+    // 1. Connect to registry and query address + fees
     info!("Connecting to registry at {}", args.registry_server);
     let mut registry_client = RegistryClient::connect(args.registry_server.clone()).await?;
+
+    let addr_res = registry_client
+        .get_registry_address(GetRegistryAddressRequest { set_id: 0 })
+        .await?
+        .into_inner();
+    let fees_res = registry_client.get_fees(GetFeesRequest {}).await?.into_inner();
+    info!("Registry address: {}", addr_res.address);
+    info!("Required merchant fee: {} sats", fees_res.merchant_fee);
+
+    // 2. Parse funding outpoint and register
+    let funding_txid = match &args.funding_txid {
+        Some(hex) => {
+            let bytes = hex::decode(hex)
+                .map_err(|e| format!("Invalid funding_txid hex: {}", e))?;
+            if bytes.len() != 32 {
+                return Err("funding_txid must be 32 bytes (64 hex chars)".into());
+            }
+            bytes
+        }
+        None => {
+            eprintln!(
+                "ERROR: No funding transaction provided.\n\
+                 Pay {} sats to {} and re-run with:\n  \
+                 --funding-txid <txid_hex> --funding-vout <vout>",
+                fees_res.merchant_fee, addr_res.address
+            );
+            std::process::exit(1);
+        }
+    };
 
     let reg_res = registry_client
         .register_merchant(MerchantRequest {
@@ -61,6 +101,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             origin: args.origin.clone(),
             email: String::new(),
             phone: String::new(),
+            funding_txid,
+            funding_vout: args.funding_vout,
         })
         .await?
         .into_inner();

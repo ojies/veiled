@@ -1,11 +1,13 @@
 use crate::core::registry::Registry;
-use crate::core::tx::{aggregate_secret_key, build_identity_tree, p2tr_script, sign_tx, IdentityTXO, IdentityTree};
 use crate::core::types::Commitment;
 use crate::core::Merchant;
 use crate::registry::db;
 use bdk_bitcoind_rpc::bitcoincore_rpc::{Client, RpcApi};
-use bitcoin::secp256k1::Secp256k1;
-use bitcoin::{Address, Amount, Network, OutPoint, TxOut};
+use bitcoin::hashes::Hash;
+use bitcoin::key::TapTweak;
+use bitcoin::secp256k1::{Keypair, Message, Secp256k1, SecretKey, XOnlyPublicKey};
+use bitcoin::sighash::{Prevouts, SighashCache, TapSighashType};
+use bitcoin::{Address, Amount, Network, OutPoint, ScriptBuf, Sequence, TxIn, TxOut, Witness};
 use rusqlite::Connection as SqlConnection;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,8 +25,9 @@ pub struct ActiveSet {
     pub beneficiary_capacity: usize,
     pub sats_per_user: u64,
     pub finalized: bool,
-    pub tree: Option<IdentityTree>,
     pub finalization_tx: watch::Sender<bool>,
+    /// Beneficiary payment UTXOs: (outpoint, value_sats).
+    pub funding_utxos: Vec<(OutPoint, u64)>,
 }
 
 /// Configuration for minimum fees enforced by the registry.
@@ -45,12 +48,41 @@ impl Default for FeeConfig {
     }
 }
 
+/// Fixed miner fee estimate (sats) for the commitment transaction on regtest.
+const MINER_FEE: u64 = 500;
+
 pub struct RegistryStore {
     pub merchant_pool: HashMap<String, MerchantInfo>,
     pub active_sets: HashMap<u64, ActiveSet>,
     pub rpc_client: Option<Arc<Client>>,
     pub fee_config: FeeConfig,
+    pub wallet_keypair: Keypair,
+    pub wallet_xonly: XOnlyPublicKey,
+    pub wallet_address: Address,
     db: Option<SqlConnection>,
+}
+
+fn generate_keypair() -> Keypair {
+    use rand_core::{OsRng, RngCore};
+    let mut sk_bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut sk_bytes);
+    let secp = Secp256k1::new();
+    let secret_key =
+        SecretKey::from_slice(&sk_bytes).expect("32 random bytes should be a valid secret key");
+    Keypair::from_secret_key(&secp, &secret_key)
+}
+
+fn keypair_from_secret(sk_bytes: &[u8; 32]) -> Keypair {
+    let secp = Secp256k1::new();
+    let secret_key = SecretKey::from_slice(sk_bytes).expect("invalid secret key bytes");
+    Keypair::from_secret_key(&secp, &secret_key)
+}
+
+fn derive_wallet_address(keypair: &Keypair) -> (XOnlyPublicKey, Address) {
+    let secp = Secp256k1::new();
+    let (xonly, _) = keypair.x_only_public_key();
+    let address = Address::p2tr(&secp, xonly, None, Network::Regtest);
+    (xonly, address)
 }
 
 impl Default for RegistryStore {
@@ -65,11 +97,16 @@ impl RegistryStore {
         fee_config: FeeConfig,
         db: Option<SqlConnection>,
     ) -> Self {
+        let keypair = generate_keypair();
+        let (wallet_xonly, wallet_address) = derive_wallet_address(&keypair);
         Self {
             merchant_pool: HashMap::new(),
             active_sets: HashMap::new(),
             rpc_client,
             fee_config,
+            wallet_keypair: keypair,
+            wallet_xonly,
+            wallet_address,
             db,
         }
     }
@@ -84,7 +121,33 @@ impl RegistryStore {
         let state =
             db::load_state(&conn).map_err(|e| format!("Failed to load database state: {}", e))?;
 
-        let mut store = Self::new(rpc_client, fee_config, Some(conn));
+        // Load or generate wallet keypair
+        let wallet_key = db::load_wallet_key(&conn)
+            .map_err(|e| format!("Failed to load wallet key: {}", e))?;
+        let keypair = if let Some(sk_bytes) = wallet_key {
+            info!("Loaded wallet keypair from database");
+            keypair_from_secret(&sk_bytes)
+        } else {
+            let kp = generate_keypair();
+            let sk = SecretKey::from_keypair(&kp);
+            db::save_wallet_key(&conn, &sk.secret_bytes())
+                .map_err(|e| format!("Failed to save wallet key: {}", e))?;
+            info!("Generated and saved new wallet keypair");
+            kp
+        };
+        let (wallet_xonly, wallet_address) = derive_wallet_address(&keypair);
+        info!("Wallet address: {}", wallet_address);
+
+        let mut store = Self {
+            merchant_pool: HashMap::new(),
+            active_sets: HashMap::new(),
+            rpc_client,
+            fee_config,
+            wallet_keypair: keypair,
+            wallet_xonly,
+            wallet_address,
+            db: Some(conn),
+        };
 
         // 1. Replay merchants
         for m in &state.merchants {
@@ -126,9 +189,9 @@ impl RegistryStore {
                     registry,
                     beneficiary_capacity: s.beneficiary_capacity,
                     sats_per_user: s.sats_per_user,
-                    finalized: false, // set after replaying commitments + tree
-                    tree: None,
+                    finalized: false, // set after replaying commitments
                     finalization_tx,
+                    funding_utxos: Vec::new(),
                 },
             );
         }
@@ -148,47 +211,17 @@ impl RegistryStore {
                 vout: c.vout,
             };
             active_set.registry.add_beneficiary(c.phi, outpoint);
+            active_set.funding_utxos.push((outpoint, c.value));
             commitment_count += 1;
         }
         info!("Restored {} commitments from database", commitment_count);
 
-        // 4. Restore finalized sets with VTxO trees
-        for t in state.vtxo_trees {
-            let active_set = store.active_sets.get_mut(&t.set_id).ok_or_else(|| {
-                format!(
-                    "DB inconsistency: vtxo_tree references unknown set {}",
-                    t.set_id
-                )
-            })?;
-            // Reconstruct IdentityTXO list from anonymity set
-            let users: Vec<IdentityTXO> = active_set
-                .registry
-                .anonymity_set()
-                .iter()
-                .map(|phi| {
-                    let pk = bitcoin::secp256k1::PublicKey::from_slice(&phi.0)
-                        .expect("phi should be a valid compressed public key");
-                    IdentityTXO {
-                        pubkey: pk,
-                        amount: Amount::from_sat(active_set.sats_per_user),
-                    }
-                })
-                .collect();
-
-            active_set.tree = Some(IdentityTree {
-                root_tx: t.root_tx,
-                fanout_tx: t.fanout_tx,
-                users,
-            });
-            active_set.finalized = true;
-            let _ = active_set.finalization_tx.send(true);
-        }
-
-        // Mark finalized sets that might not have trees (edge case)
+        // 4. Mark finalized sets
         for s in &state.sets {
             if s.finalized {
                 if let Some(active_set) = store.active_sets.get_mut(&s.set_id) {
                     active_set.finalized = true;
+                    let _ = active_set.finalization_tx.send(true);
                 }
             }
         }
@@ -202,10 +235,56 @@ impl RegistryStore {
         origin: &str,
         email: String,
         phone: String,
+        outpoint: OutPoint,
     ) -> Result<(), String> {
         if self.merchant_pool.contains_key(name) {
             return Err(format!("Merchant '{}' already registered", name));
         }
+
+        // Verify payment on-chain if RPC client is available
+        if let Some(rpc) = &self.rpc_client {
+            let expected_address = self.wallet_address.to_string();
+            let required_fee = self.fee_config.merchant_registration_fee;
+
+            let raw_tx: serde_json::Value = rpc
+                .call(
+                    "getrawtransaction",
+                    &[
+                        serde_json::json!(outpoint.txid.to_string()),
+                        serde_json::json!(true),
+                    ],
+                )
+                .map_err(|e| format!("Failed to fetch transaction {}: {}", outpoint.txid, e))?;
+
+            let vout_array = raw_tx["vout"]
+                .as_array()
+                .ok_or("Transaction has no vout array")?;
+            let output = vout_array
+                .get(outpoint.vout as usize)
+                .ok_or(format!("vout index {} not found in tx", outpoint.vout))?;
+
+            let script_address = output["scriptPubKey"]["address"]
+                .as_str()
+                .ok_or("Output has no address")?;
+            if script_address != expected_address {
+                return Err(format!(
+                    "Payment output address mismatch: expected {}, got {}",
+                    expected_address, script_address
+                ));
+            }
+
+            let value_btc = output["value"]
+                .as_f64()
+                .ok_or("Output has no value")?;
+            let value_sats = (value_btc * 100_000_000.0).round() as u64;
+            if value_sats < required_fee {
+                return Err(format!(
+                    "Merchant registration fee too low: expected {} sats, got {} sats",
+                    required_fee, value_sats
+                ));
+            }
+        }
+
         let merchant = Merchant::new(name, origin);
         self.merchant_pool.insert(
             name.to_string(),
@@ -269,8 +348,8 @@ impl RegistryStore {
                 beneficiary_capacity,
                 sats_per_user,
                 finalized: false,
-                tree: None,
                 finalization_tx,
+                funding_utxos: Vec::new(),
             },
         );
 
@@ -288,6 +367,12 @@ impl RegistryStore {
         phi: Commitment,
         outpoint: OutPoint,
     ) -> Result<usize, String> {
+        let sats_per_user = self
+            .active_sets
+            .get(&set_id)
+            .ok_or_else(|| format!("Set {} not found", set_id))?
+            .sats_per_user;
+
         let active_set = self
             .active_sets
             .get_mut(&set_id)
@@ -302,20 +387,13 @@ impl RegistryStore {
         }
 
         // Check for duplicate
-        if active_set
-            .registry
-            .anonymity_set()
-            .contains(&phi)
-        {
+        if active_set.registry.anonymity_set().contains(&phi) {
             return Err("Beneficiary already registered in this set".to_string());
         }
 
         // Verify payment on-chain if RPC client is available
-        if let Some(rpc) = &self.rpc_client {
-            let registry_pk = active_set.registry.public_key();
-            let (xonly, _) = registry_pk.x_only_public_key();
-            let secp = Secp256k1::new();
-            let registry_address = Address::p2tr(&secp, xonly, None, Network::Regtest);
+        let value_sats = if let Some(rpc) = &self.rpc_client {
+            let expected_address = self.wallet_address.to_string();
 
             // Fetch the transaction from bitcoind
             let raw_tx: serde_json::Value = rpc
@@ -336,11 +414,10 @@ impl RegistryStore {
                 .get(outpoint.vout as usize)
                 .ok_or(format!("vout index {} not found in tx", outpoint.vout))?;
 
-            // Check the address matches the registry's P2TR address
+            // Check the address matches the registry wallet's P2TR address
             let script_address = output["scriptPubKey"]["address"]
                 .as_str()
                 .ok_or("Output has no address")?;
-            let expected_address = registry_address.to_string();
             if script_address != expected_address {
                 return Err(format!(
                     "Payment output address mismatch: expected {}, got {}",
@@ -352,47 +429,43 @@ impl RegistryStore {
             let value_btc = output["value"]
                 .as_f64()
                 .ok_or("Output has no value")?;
-            let value_sats = (value_btc * 100_000_000.0).round() as u64;
-            if value_sats < active_set.sats_per_user {
+            let vs = (value_btc * 100_000_000.0).round() as u64;
+            if vs < sats_per_user {
                 return Err(format!(
                     "Payment amount too low: expected {} sats, got {} sats",
-                    active_set.sats_per_user, value_sats
+                    sats_per_user, vs
                 ));
             }
-        }
+            vs
+        } else {
+            // No RPC client (tests/demo) — assume sats_per_user
+            sats_per_user
+        };
 
         let index = active_set.registry.add_beneficiary(phi, outpoint);
+        active_set.funding_utxos.push((outpoint, value_sats));
 
         if let Some(ref conn) = self.db {
-            db::save_commitment(conn, set_id, index, &phi, &outpoint)
+            db::save_commitment(conn, set_id, index, &phi, &outpoint, value_sats)
                 .map_err(|e| format!("DB error saving commitment: {}", e))?;
         }
 
         Ok(index)
     }
 
-    /// Finalize the set: build the VTxO tree, sign, and broadcast.
-    /// Returns (root_txid, fanout_txid) as hex strings.
-    pub fn finalize_set(
-        &mut self,
-        set_id: u64,
-        sats_per_user: u64,
-        funding_outpoint: OutPoint,
-    ) -> Result<(String, String), String> {
+    /// Finalize the set: create Taproot commitment, sign, and broadcast.
+    ///
+    /// The registry self-funds the commitment transaction using the beneficiary
+    /// payment UTXOs it has collected. Each beneficiary payment becomes an input
+    /// to the commitment transaction.
+    pub fn finalize_set(&mut self, set_id: u64) -> Result<String, String> {
         let active_set = self
             .active_sets
             .get_mut(&set_id)
             .ok_or_else(|| format!("Set {} not found", set_id))?;
 
         if active_set.finalized {
-            // Return txids from existing tree if already finalized
-            if let Some(ref tree) = active_set.tree {
-                return Ok((
-                    tree.root_tx.compute_txid().to_string(),
-                    tree.fanout_tx.compute_txid().to_string(),
-                ));
-            }
-            return Ok((String::new(), String::new()));
+            return Ok(format!("Set {} already finalized", set_id));
         }
 
         if active_set.registry.beneficiary_count() < active_set.beneficiary_capacity {
@@ -403,66 +476,86 @@ impl RegistryStore {
             ));
         }
 
-        // Build VTxO tree
-        let identity_txos: Vec<IdentityTXO> = active_set
+        let funding_utxos = active_set.funding_utxos.clone();
+        let total_input: u64 = funding_utxos.iter().map(|(_, v)| *v).sum();
+
+        // Create Taproot commitment (Merkle root of anonymity set).
+        // We pass a dummy outpoint; we'll replace inputs with actual beneficiary UTXOs.
+        let dummy_outpoint = OutPoint::null();
+        let mut commitment = active_set
             .registry
-            .anonymity_set()
+            .create_anonymity_set(dummy_outpoint)
+            .map_err(|e| format!("Failed to create Taproot commitment: {}", e))?;
+
+        // Replace the dummy input with actual beneficiary payment UTXOs
+        commitment.tx.input = funding_utxos
             .iter()
-            .map(|phi| {
-                let pk = bitcoin::secp256k1::PublicKey::from_slice(&phi.0)
-                    .expect("phi should be a valid compressed public key");
-                IdentityTXO {
-                    pubkey: pk,
-                    amount: Amount::from_sat(sats_per_user),
-                }
+            .map(|(op, _)| TxIn {
+                previous_output: *op,
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                witness: Witness::default(),
             })
             .collect();
 
-        let mut tree = build_identity_tree(&identity_txos, funding_outpoint)
-            .map_err(|e| format!("Failed to build VTxO tree: {}", e))?;
+        // Adjust output value to account for miner fee
+        let output_value = total_input.saturating_sub(MINER_FEE);
+        commitment.tx.output[0].value = Amount::from_sat(output_value);
 
-        // Sign the commitment transactions with the aggregate key
-        let all_keys: Vec<_> = identity_txos.iter().map(|u| u.pubkey).collect();
-        let agg_sk = aggregate_secret_key(&all_keys);
-        let secp = Secp256k1::new();
-        let agg_pk = agg_sk.public_key(&secp);
-        let (agg_xonly, _) = agg_pk.x_only_public_key();
+        // Sign all inputs using BIP341 Taproot key-spend
+        if self.rpc_client.is_some() {
+            let secp = Secp256k1::new();
+            let tweaked_keypair = self.wallet_keypair.tap_tweak(&secp, None);
+            let wallet_script = self.wallet_address.script_pubkey();
 
-        // The funding UTXO is locked to the aggregate key's P2TR script
-        let funding_prevout = TxOut {
-            value: tree.value(),
-            script_pubkey: p2tr_script(&agg_xonly),
-        };
+            let prevouts: Vec<TxOut> = funding_utxos
+                .iter()
+                .map(|(_, v)| TxOut {
+                    value: Amount::from_sat(*v),
+                    script_pubkey: wallet_script.clone(),
+                })
+                .collect();
+            let prevouts_ref: Vec<&TxOut> = prevouts.iter().collect();
 
-        // Sign root_tx (spends the funding UTXO)
-        sign_tx(&mut tree.root_tx, &agg_sk, &funding_prevout);
+            for i in 0..commitment.tx.input.len() {
+                let mut sighash_cache = SighashCache::new(&commitment.tx);
+                let sighash = sighash_cache
+                    .taproot_key_spend_signature_hash(
+                        i,
+                        &Prevouts::All(&prevouts_ref),
+                        TapSighashType::Default,
+                    )
+                    .map_err(|e| format!("Sighash computation failed for input {}: {}", i, e))?;
 
-        // Sign fanout_tx (spends root_tx output[0])
-        let root_output = tree.root_tx.output[0].clone();
-        sign_tx(&mut tree.fanout_tx, &agg_sk, &root_output);
+                let msg = Message::from_digest(sighash.to_byte_array());
+                let sig = secp.sign_schnorr(&msg, &tweaked_keypair.to_keypair());
 
-        let root_txid = tree.root_tx.compute_txid().to_string();
-        let fanout_txid = tree.fanout_tx.compute_txid().to_string();
+                let mut witness = Witness::new();
+                witness.push(sig.as_ref());
+                commitment.tx.input[i].witness = witness;
+            }
 
-        // Broadcast if RPC client is available
-        if let Some(ref rpc) = self.rpc_client {
-            rpc.send_raw_transaction(&tree.root_tx)
-                .map_err(|e| format!("Failed to broadcast root_tx: {}", e))?;
-            rpc.send_raw_transaction(&tree.fanout_tx)
-                .map_err(|e| format!("Failed to broadcast fanout_tx: {}", e))?;
+            // Broadcast the signed commitment transaction
+            self.rpc_client
+                .as_ref()
+                .unwrap()
+                .send_raw_transaction(&commitment.tx)
+                .map_err(|e| format!("Failed to broadcast commitment tx: {}", e))?;
+
+            info!(
+                "Broadcast commitment tx: {}",
+                commitment.tx.compute_txid()
+            );
         }
 
         active_set.finalized = true;
         if let Some(ref conn) = self.db {
-            db::save_vtxo_tree(conn, set_id, &tree.root_tx, &tree.fanout_tx)
-                .map_err(|e| format!("DB error saving vtxo tree: {}", e))?;
             db::mark_set_finalized(conn, set_id)
                 .map_err(|e| format!("DB error marking set finalized: {}", e))?;
         }
-        active_set.tree = Some(tree);
         let _ = active_set.finalization_tx.send(true);
 
-        Ok((root_txid, fanout_txid))
+        Ok(format!("Set {} finalized", set_id))
     }
 
     pub fn get_crs(&self, set_id: u64) -> Result<&Registry, String> {
@@ -479,67 +572,21 @@ impl RegistryStore {
             .ok_or_else(|| format!("Set {} not found", set_id))
     }
 
-    pub fn get_vtxo_tree(&self, set_id: u64) -> Result<&IdentityTree, String> {
-        let active_set = self
-            .active_sets
-            .get(&set_id)
-            .ok_or_else(|| format!("Set {} not found", set_id))?;
-        active_set
-            .tree
-            .as_ref()
-            .ok_or_else(|| format!("Set {} not yet finalized", set_id))
-    }
-
-    pub fn get_aggregate_address(&self, set_id: u64) -> Result<(String, Vec<u8>), String> {
-        let active_set = self
-            .active_sets
-            .get(&set_id)
-            .ok_or_else(|| format!("Set {} not found", set_id))?;
-
-        let pubkeys: Vec<bitcoin::secp256k1::PublicKey> = active_set
-            .registry
-            .anonymity_set()
-            .iter()
-            .map(|phi| {
-                bitcoin::secp256k1::PublicKey::from_slice(&phi.0)
-                    .expect("phi should be a valid compressed public key")
-            })
-            .collect();
-
-        if pubkeys.len() < 2 {
-            return Err("Need at least 2 beneficiaries to compute aggregate key".to_string());
-        }
-
-        let agg_sk = aggregate_secret_key(&pubkeys);
-        let secp = Secp256k1::new();
-        let agg_pk = agg_sk.public_key(&secp);
-        let (agg_xonly, _) = agg_pk.x_only_public_key();
-
-        // Use p2tr_script (which uses dangerous_assume_tweaked) to match
-        // the script used in create_root_tx — NOT Address::p2tr() which
-        // applies a BIP341 tweak.
-        let script = p2tr_script(&agg_xonly);
-        let address = Address::from_script(&script, Network::Regtest)
-            .map_err(|e| format!("Failed to derive aggregate address: {}", e))?;
-
-        Ok((address.to_string(), agg_xonly.serialize().to_vec()))
-    }
-
     pub fn get_fees(&self) -> &FeeConfig {
         &self.fee_config
     }
 
     pub fn get_registry_address(&self, set_id: u64) -> Result<(String, Vec<u8>), String> {
-        let active_set = self
-            .active_sets
-            .get(&set_id)
-            .ok_or_else(|| format!("Set {} not found", set_id))?;
+        // set_id=0 returns the global wallet address (used by merchants before sets exist)
+        if set_id != 0 {
+            self.active_sets
+                .get(&set_id)
+                .ok_or_else(|| format!("Set {} not found", set_id))?;
+        }
 
-        let pk = active_set.registry.public_key();
-        let (xonly, _) = pk.x_only_public_key();
-        let secp = Secp256k1::new();
-        let address = Address::p2tr(&secp, xonly, None, Network::Regtest);
-
-        Ok((address.to_string(), xonly.serialize().to_vec()))
+        Ok((
+            self.wallet_address.to_string(),
+            self.wallet_xonly.serialize().to_vec(),
+        ))
     }
 }

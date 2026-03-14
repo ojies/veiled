@@ -2,14 +2,12 @@ use crate::core::types::Commitment;
 use crate::registry::pb::registry_server::Registry;
 use crate::registry::pb::{
     BeneficiaryRequest, BeneficiaryResponse, CreateSetRequest, CreateSetResponse,
-    FinalizeSetRequest, FinalizeSetResponse, GetAggregateAddressRequest,
-    GetAggregateAddressResponse, GetAnonymitySetRequest, GetAnonymitySetResponse,
+    FinalizeSetRequest, FinalizeSetResponse, GetAnonymitySetRequest, GetAnonymitySetResponse,
     GetCrsRequest, GetCrsResponse, GetFeesRequest, GetFeesResponse, GetMerchantsRequest,
     GetMerchantsResponse, GetRegistryAddressRequest, GetRegistryAddressResponse,
-    GetVtxoTreeRequest, GetVtxoTreeResponse, MerchantEntry, MerchantRequest, MerchantResponse,
+    MerchantEntry, MerchantRequest, MerchantResponse,
 };
 use crate::registry::store::RegistryStore;
-use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::{OutPoint, Txid};
 use std::sync::Arc;
@@ -37,9 +35,22 @@ impl Registry for RegistryService {
         request: Request<MerchantRequest>,
     ) -> Result<Response<MerchantResponse>, Status> {
         let req = request.into_inner();
+
+        let txid: Txid = {
+            let txid_bytes: [u8; 32] = req
+                .funding_txid
+                .try_into()
+                .map_err(|_| Status::invalid_argument("funding_txid must be 32 bytes"))?;
+            Txid::from_byte_array(txid_bytes)
+        };
+        let outpoint = OutPoint {
+            txid,
+            vout: req.funding_vout,
+        };
+
         let mut store = self.store.lock().await;
         store
-            .register_merchant(&req.name, &req.origin, req.email, req.phone)
+            .register_merchant(&req.name, &req.origin, req.email, req.phone, outpoint)
             .map_err(Status::already_exists)?;
         Ok(Response::new(MerchantResponse {
             message: format!("Merchant '{}' registered", req.name),
@@ -105,32 +116,12 @@ impl Registry for RegistryService {
         request: Request<FinalizeSetRequest>,
     ) -> Result<Response<FinalizeSetResponse>, Status> {
         let req = request.into_inner();
-
-        let txid: Txid = if req.funding_txid.is_empty() {
-            Txid::all_zeros()
-        } else {
-            let txid_bytes: [u8; 32] = req
-                .funding_txid
-                .try_into()
-                .map_err(|_| Status::invalid_argument("funding_txid must be 32 bytes"))?;
-            Txid::from_byte_array(txid_bytes)
-        };
-
-        let funding_outpoint = OutPoint {
-            txid,
-            vout: req.funding_vout,
-        };
-
         let mut store = self.store.lock().await;
-        let (root_txid, fanout_txid) = store
-            .finalize_set(req.set_id, req.sats_per_user, funding_outpoint)
+        let message = store
+            .finalize_set(req.set_id)
             .map_err(Status::failed_precondition)?;
 
-        Ok(Response::new(FinalizeSetResponse {
-            message: format!("Set {} finalized", req.set_id),
-            root_txid,
-            fanout_txid,
-        }))
+        Ok(Response::new(FinalizeSetResponse { message }))
     }
 
     async fn get_merchants(
@@ -188,32 +179,6 @@ impl Registry for RegistryService {
         }))
     }
 
-    async fn get_vtxo_tree(
-        &self,
-        request: Request<GetVtxoTreeRequest>,
-    ) -> Result<Response<GetVtxoTreeResponse>, Status> {
-        let req = request.into_inner();
-        let store = self.store.lock().await;
-        let tree = store
-            .get_vtxo_tree(req.set_id)
-            .map_err(Status::not_found)?;
-
-        let mut root_tx_bytes = Vec::new();
-        tree.root()
-            .consensus_encode(&mut root_tx_bytes)
-            .map_err(|e| Status::internal(format!("Failed to encode root_tx: {}", e)))?;
-
-        let mut fanout_tx_bytes = Vec::new();
-        tree.fanout()
-            .consensus_encode(&mut fanout_tx_bytes)
-            .map_err(|e| Status::internal(format!("Failed to encode fanout_tx: {}", e)))?;
-
-        Ok(Response::new(GetVtxoTreeResponse {
-            root_tx: root_tx_bytes,
-            fanout_tx: fanout_tx_bytes,
-        }))
-    }
-
     async fn get_registry_address(
         &self,
         request: Request<GetRegistryAddressRequest>,
@@ -226,21 +191,6 @@ impl Registry for RegistryService {
         Ok(Response::new(GetRegistryAddressResponse {
             address,
             internal_key,
-        }))
-    }
-
-    async fn get_aggregate_address(
-        &self,
-        request: Request<GetAggregateAddressRequest>,
-    ) -> Result<Response<GetAggregateAddressResponse>, Status> {
-        let req = request.into_inner();
-        let store = self.store.lock().await;
-        let (address, aggregate_key) = store
-            .get_aggregate_address(req.set_id)
-            .map_err(Status::failed_precondition)?;
-        Ok(Response::new(GetAggregateAddressResponse {
-            address,
-            aggregate_key,
         }))
     }
 

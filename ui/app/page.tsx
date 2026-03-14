@@ -59,7 +59,7 @@ const PRIVACY_PROPERTIES = [
   {
     icon: "\u26D3",
     title: "Bitcoin Anchored",
-    desc: "Anonymity sets are sealed on-chain via VTxO trees of P2TR outputs, providing a tamper-proof public record.",
+    desc: "Anonymity sets are sealed on-chain via Taproot commitments with P2TR outputs, providing a tamper-proof public record.",
   },
 ];
 
@@ -81,7 +81,7 @@ const ARCHITECTURE_LAYERS = [
   },
   {
     label: "Bitcoin",
-    items: ["bitcoind regtest", "P2TR addresses", "VTxO tree"],
+    items: ["bitcoind regtest", "P2TR addresses", "Taproot commitment"],
     color: "#f87171",
   },
 ];
@@ -102,7 +102,7 @@ const PROTOCOL_STEPS = [
   },
   {
     title: "Anonymous Registration",
-    desc: "The commitment is registered in a fixed-size anonymity set, sealed on Bitcoin via a VTxO tree of P2TR outputs.",
+    desc: "The commitment is registered in a fixed-size anonymity set, sealed on Bitcoin via a Taproot commitment with P2TR outputs.",
   },
   {
     title: "ZK Proof of Membership",

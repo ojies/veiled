@@ -11,7 +11,7 @@ for lightweight authentication.
 
 | Role | Description |
 |------|-------------|
-| **Registry** | Coordinates merchant registration, manages anonymity sets, generates the CRS, and builds VTxO trees anchored on Bitcoin |
+| **Registry** | Coordinates merchant registration, manages anonymity sets, generates the CRS, holds a persistent wallet (keypair in SQLite), collects registration fees, and creates self-funded Taproot commitments anchored on Bitcoin |
 | **Merchant** | Payment provider that verifies ZK proofs, stores pseudonymous identities, and sends Bitcoin payments |
 | **Beneficiary** | End user who creates a master credential, registers anonymously, and receives payments under unlinkable pseudonyms |
 
@@ -19,9 +19,14 @@ for lightweight authentication.
 
 ## Phase 0 — System Setup (CRS)
 
-Merchants register with the registry. An anonymity set is created, which
-triggers Common Reference String (CRS) generation from the registered
-merchants:
+Merchants pay a one-time registration fee to the registry's P2TR address
+(queried via `GetRegistryAddress` with `set_id=0`, which returns the global
+wallet address before any set exists) and provide the payment outpoint for
+on-chain verification. This fee is global — once registered, a merchant can
+be included in any number of future anonymity sets.
+
+An anonymity set is then created, which triggers Common Reference String (CRS)
+generation from the registered merchants:
 
 ```
 crs = (G, q, g, h_1..h_L, v_1..v_L, G_auth_1..G_auth_L)
@@ -87,7 +92,6 @@ GetRegistryAddress(set_id)            →  address, internal_key
 <pay beneficiary_fee to registry address>
 RegisterBeneficiary(set_id, Φ, name, funding_txid, funding_vout)  →  index
 SubscribeSetFinalization(set_id)      →  stream(anonymity_set)
-GetVtxoTree(set_id)                   →  (root_tx, fanout_tx)
 ```
 
 The registry fetches the referenced transaction via `getrawtransaction`,
@@ -95,34 +99,31 @@ verifies the output at `funding_vout` pays the correct P2TR address with at
 least `beneficiary_fee` sats, then adds Φ to the anonymity set.
 
 Once the set reaches its capacity, it is **finalized** — sealed permanently
-with no further additions or removals. The registry signs both transactions
-with the aggregate key and broadcasts them. It then builds a **VTxO tree**:
+with no further additions or removals. The registry creates a **Taproot
+commitment** transaction self-funded from the collected beneficiary payment
+UTXOs, signs all inputs with BIP341 Taproot key-spend, and broadcasts it to
+Bitcoin. All subscribers are notified via the streaming RPC. The beneficiary
+downloads the frozen anonymity set, which is needed for proof generation.
 
-```
-            [Root TX]  ← single UTXO broadcast on Bitcoin
-           /          \
-     [Fanout TX]      ...
-     /    |    \
-  [Φ_1] [Φ_2] ... [Φ_N]   ← N P2TR outputs, one per beneficiary
-```
-
-Each leaf is a P2TR output whose internal key is the beneficiary's Φ. This
-works because Φ is already a valid compressed secp256k1 public key. All
-subscribers are notified via the streaming RPC. The beneficiary downloads
-the frozen anonymity set and VTxO tree — both are needed for proof
-generation.
-
-### Funding and broadcast
+### Funding and self-funded commitment
 
 Beneficiaries and merchants pay registration fees to the registry's P2TR
-address (queried via `GetRegistryAddress`). Fee amounts are configured on the
-registry and queried via `GetFees`. The registry verifies each payment
-on-chain before admitting participants.
+address (queried via `GetRegistryAddress`). Merchants use `set_id=0` to query
+the address before any set exists. Fee amounts are configured on the registry
+and queried via `GetFees`. The registry verifies each payment on-chain via
+`getrawtransaction` before admitting participants.
 
-The collected fees fund the VTxO tree. At finalization, the funding UTXO is
-sent to the **aggregate address** (derived from all beneficiary pubkeys via
-`GetAggregateAddress`). The registry signs both `root_tx` and `fanout_tx`
-with the aggregate secret key and broadcasts them to the Bitcoin network.
+At finalization, the registry aggregates all beneficiary payment UTXOs as
+inputs to the commitment transaction, signs each input with BIP341 Taproot
+key-spend using its persisted wallet keypair, and broadcasts the signed
+transaction. No external funding outpoint is required.
+
+### Payment model
+
+- **Merchants** pay a one-time global registration fee (`merchant_fee`,
+  default 3,000 sats). This is not tied to any specific anonymity set.
+- **Beneficiaries** pay a per-set registration fee (`sats_per_user`, default
+  2,000 sats). These payments fund the commitment transaction at finalization.
 
 ---
 
@@ -227,7 +228,7 @@ identifiers remain unlinkable.
 | Party | Learns | Does NOT learn |
 |-------|--------|----------------|
 | **Registry** | Φ (commitment), beneficiary name | sk, r, k, which merchant the beneficiary will use |
-| **Bitcoin** (on-chain) | Φ as a P2TR leaf key in VTxO tree | Nothing about the commitment's contents |
+| **Bitcoin** (on-chain) | Φ as part of a Taproot commitment | Nothing about the commitment's contents |
 | **Merchant A** | ϕ_A (pseudonym), nul_A, friendly_name | Beneficiary's index in the set, blinding key k, Merchant B's identifiers |
 | **Two colluding merchants** | Both see the friendly_name — can match | Cannot link pseudonyms or nullifiers cryptographically |
 

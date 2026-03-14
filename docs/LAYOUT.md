@@ -22,12 +22,13 @@ veiled/
 │   │   ├── nullifier.rs               # HKDF nullifier derivation
 │   │   ├── types.rs                    # Commitment, Name, MasterSecret, etc.
 │   │   ├── utils.rs                    # Pedersen commitment helper
-│   │   ├── tx.rs                       # VTxO tree construction
+│   │   ├── tx.rs                       # Transaction construction utilities
 │   │   ├── verifier.rs                # Proof verification state machine
 │   │   └── full_flow_test.rs          # End-to-end Phase 0-5 test
 │   ├── registry/                       # gRPC registry service
 │   │   ├── mod.rs                      # protobuf includes
-│   │   ├── store.rs                    # RegistryStore (in-memory state)
+│   │   ├── db.rs                       # SQLite persistence (merchants, sets, commitments, wallet key)
+│   │   ├── store.rs                    # RegistryStore (state + wallet keypair, replays from SQLite on restart)
 │   │   └── service.rs                  # RegistryService (gRPC handlers)
 │   └── bin/
 │       ├── registry_grpc.rs            # Registry server entry point

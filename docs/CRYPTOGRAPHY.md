@@ -222,7 +222,7 @@ the internal key with no script path, producing a standard P2TR output.
 | **Pseudonym (ϕ_l)** | `csk_l · g` — per-merchant public identity, unlinkable across merchants |
 | **Child secret key (csk_l)** | `HKDF(r, merchant_name)` — per-merchant auth key |
 | **Anonymity set (Λ)** | Fixed-size batch of commitments; sealed after finalization |
-| **VTxO tree** | Binary tree of pre-signed Bitcoin transactions; root is on-chain, leaves are P2TR outputs |
+| **Taproot commitment** | Transaction anchoring the anonymity set on Bitcoin via a Taproot output from the funding outpoint |
 | **P2TR address** | Pay-to-Taproot Bitcoin address derived from pseudonym |
 | **Payment identity registration** | (ϕ, nul_l, proof, friendly_name) — submission to merchant |
 | **NUMS** | Nothing Up My Sleeve — generators with no known discrete log relationships |
