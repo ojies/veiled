@@ -291,6 +291,46 @@ tbody tr:hover {
   to { transform: translateY(60px); }
 }
 
+/* ── Alert banner ── */
+
+.alert-banner {
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.alert-banner--warning {
+  background: #1a1400;
+  border: 1px solid rgba(245, 166, 35, 0.4);
+  color: #f5a623;
+}
+
+.alert-banner a {
+  color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.alert-banner a:hover {
+  color: #f5a623;
+}
+
+/* ── Loading skeleton ── */
+
+.skeleton {
+  background: linear-gradient(90deg, #1a1a1a 25%, #222 50%, #1a1a1a 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: 0.5rem;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /* ── Nav links ── */
 
 .nav-link {
@@ -320,9 +360,75 @@ tbody tr:hover {
   .btn, .btn-outline {
     padding: 0.5rem 1rem;
     font-size: 0.9rem;
+    min-height: 44px; /* touch target */
   }
 
   .hex {
+    font-size: 0.7rem;
+  }
+
+  .form-row {
+    flex-direction: column;
+  }
+
+  .form-row input,
+  .form-row select {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .stats-row {
+    gap: 0.5rem;
+  }
+
+  .stat-card {
+    min-width: 90px;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .stat-value {
+    font-size: 1.1rem;
+  }
+
+  .stepper {
+    gap: 0;
+    padding-bottom: 0.75rem;
+  }
+
+  .stepper-label {
+    font-size: 0.7rem;
+  }
+
+  .stepper-line {
+    width: 12px;
+    margin: 0 0.2rem;
+  }
+
+  .stepper-circle {
+    width: 24px;
+    height: 24px;
+    font-size: 0.65rem;
+  }
+
+  .phase-card-body {
+    padding: 1rem;
+  }
+
+  .wallet-card {
+    padding: 0.75rem;
+  }
+
+  .wallet-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+
+  table {
+    font-size: 0.8rem;
+  }
+
+  thead th {
     font-size: 0.7rem;
   }
 
@@ -491,6 +597,12 @@ tbody tr:hover {
 .phase-card-body {
   padding: 1.25rem;
   background: var(--card);
+  animation: phase-expand 0.2s ease-out;
+}
+
+@keyframes phase-expand {
+  from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; }
+  to { opacity: 1; max-height: 500px; }
 }
 
 /* ── Wallet Card ── */

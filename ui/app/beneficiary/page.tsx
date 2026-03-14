@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Stepper from "@/components/Stepper";
 import PhaseCard from "@/components/PhaseCard";
 import WalletCard from "@/components/WalletCard";
@@ -75,6 +75,12 @@ export default function BeneficiaryPage() {
   // Incoming payments
   const [incomingTxs, setIncomingTxs] = useState<IncomingTx[]>([]);
 
+  // Memoize wallet name to avoid recomputing on every render
+  const walletName = useMemo(
+    () => name ? `beneficiary-${name.toLowerCase().replace(/\s+/g, "-")}` : "",
+    [name]
+  );
+
   // Calculate active step
   const activeStep = !phi
     ? 0
@@ -86,50 +92,42 @@ export default function BeneficiaryPage() {
     ? 3
     : 4;
 
-  // Lazy init on mount
-  useEffect(() => {
-    const init = async () => {
-      try {
-        const res = await fetch("/api/setup/init", { method: "POST" });
-        const data = await res.json();
-        if (data.fees) setFees(data.fees);
-        if (data.waiting) {
-          setInitWaiting(true);
-        } else {
-          setInitDone(true);
-          setRegistryAddress(data.registry_address || "");
-        }
-        if (data.merchants) {
-          setMerchants(data.merchants);
-          if (data.merchants.length) setSelectedMerchant(data.merchants[0].name);
-        }
-      } catch {
-        toast("Failed to connect to backend", "error");
-      }
-    };
-    init();
-  }, [toast]);
-
-  // Fetch merchants periodically if waiting
-  useEffect(() => {
-    if (!initWaiting) return;
-    const interval = setInterval(async () => {
+  // Check init status (called on mount and before credential creation)
+  const checkInit = useCallback(async () => {
+    try {
       const res = await fetch("/api/setup/init", { method: "POST" });
       const data = await res.json();
-      if (!data.waiting) {
+      if (data.fees) setFees(data.fees);
+      if (data.waiting) {
+        setInitWaiting(true);
+        setInitDone(false);
+        return false;
+      } else {
         setInitWaiting(false);
         setInitDone(true);
         setRegistryAddress(data.registry_address || "");
-        if (data.fees) setFees(data.fees);
         if (data.merchants) {
           setMerchants(data.merchants);
           if (data.merchants.length) setSelectedMerchant(data.merchants[0].name);
         }
-        toast("Merchants registered — ready to proceed", "success");
+        return true;
       }
-    }, 3000);
+    } catch {
+      toast("Failed to connect to backend", "error");
+      return false;
+    }
+  }, [toast, setRegistryAddress]);
+
+  // Check on mount + poll with delay when waiting
+  useEffect(() => {
+    checkInit();
+  }, [checkInit]);
+
+  useEffect(() => {
+    if (!initWaiting) return;
+    const interval = setInterval(checkInit, 10_000);
     return () => clearInterval(interval);
-  }, [initWaiting, toast]);
+  }, [initWaiting, checkInit]);
 
   // Poll incoming payments
   useEffect(() => {
@@ -152,8 +150,7 @@ export default function BeneficiaryPage() {
 
   // Refresh balance
   const refreshBalance = useCallback(async () => {
-    if (!name) return;
-    const walletName = `beneficiary-${name.toLowerCase().replace(/\s+/g, "-")}`;
+    if (!walletName) return;
     try {
       const res = await fetch(
         `/api/wallet/balance?name=${encodeURIComponent(walletName)}`
@@ -163,7 +160,7 @@ export default function BeneficiaryPage() {
     } catch {
       // ignore
     }
-  }, [name]);
+  }, [walletName]);
 
   useEffect(() => {
     if (walletCreated) {
@@ -185,7 +182,9 @@ export default function BeneficiaryPage() {
 
   async function createCredential() {
     if (!name.trim()) return;
-    if (!merchantsReady) {
+    // Re-check merchant status on demand
+    const ready = await checkInit();
+    if (!ready) {
       toast("Not enough merchants registered in the registry. Register merchants first or use the seed merchant faucet on the Demo Controls page.", "error");
       return;
     }
@@ -196,7 +195,6 @@ export default function BeneficiaryPage() {
       toast("Identity credential created", "success");
 
       // Auto-create wallet
-      const walletName = `beneficiary-${name.toLowerCase().replace(/\s+/g, "-")}`;
       try {
         const w = await api("/api/wallet/create", { name: walletName, role: "beneficiary" });
         setWalletAddress(w.address);
@@ -212,7 +210,7 @@ export default function BeneficiaryPage() {
   }
 
   async function fundWallet() {
-    const walletName = `beneficiary-${name.toLowerCase().replace(/\s+/g, "-")}`;
+    if (!walletName) return;
     setWalletLoading(true);
     try {
       await api("/api/wallet/faucet", { names: [walletName] });
@@ -331,21 +329,10 @@ export default function BeneficiaryPage() {
       <Stepper steps={STEPS} activeStep={activeStep} />
 
       {!merchantsReady && !phi && (
-        <div
-          style={{
-            background: "#1a1400",
-            border: "1px solid #f5a623",
-            borderRadius: "0.5rem",
-            padding: "0.75rem 1rem",
-            marginBottom: "1rem",
-            color: "#f5a623",
-            fontSize: "0.85rem",
-          }}
-        >
+        <div className="alert-banner alert-banner--warning">
           Waiting for merchants to register in the registry. Register merchants from the{" "}
-          <a href="/merchant" style={{ color: "#fff", textDecoration: "underline" }}>Merchant</a> page
-          or use the seed faucet on the{" "}
-          <a href="/demo" style={{ color: "#fff", textDecoration: "underline" }}>Demo Controls</a> page.
+          <a href="/merchant">Merchant</a> page or use the seed faucet on the{" "}
+          <a href="/demo">Demo Controls</a> page.
         </div>
       )}
 

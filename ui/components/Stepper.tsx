@@ -1,5 +1,7 @@
 "use client";
 
+import { memo } from "react";
+
 interface Step {
   label: string;
   description?: string;
@@ -10,7 +12,7 @@ interface StepperProps {
   activeStep: number;
 }
 
-export default function Stepper({ steps, activeStep }: StepperProps) {
+export default memo(function Stepper({ steps, activeStep }: StepperProps) {
   return (
     <div className="stepper">
       {steps.map((step, i) => {
@@ -44,4 +46,4 @@ export default function Stepper({ steps, activeStep }: StepperProps) {
       })}
     </div>
   );
-}
+});

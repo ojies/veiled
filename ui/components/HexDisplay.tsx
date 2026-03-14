@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, memo } from "react";
 
 interface HexDisplayProps {
   value: string;
@@ -9,7 +9,7 @@ interface HexDisplayProps {
   truncate?: number;
 }
 
-export default function HexDisplay({
+export default memo(function HexDisplay({
   value,
   label,
   full = false,
@@ -38,4 +38,4 @@ export default function HexDisplay({
       </span>
     </span>
   );
-}
+});
