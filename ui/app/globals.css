@@ -199,32 +199,32 @@ tbody tr:hover {
 
 
 .ring-1 {
-  width: min(90vw, 800px);
-  height: min(90vw, 800px);
+  width: 90vw;
+  height: 90vw;
   border-top-color: rgba(245, 166, 35, 0.15);
   border-right-color: rgba(245, 166, 35, 0.08);
   animation: spin 25s linear infinite;
 }
 
 .ring-2 {
-  width: min(70vw, 600px);
-  height: min(70vw, 600px);
+  width: 70vw;
+  height: 70vw;
   border-bottom-color: rgba(255, 255, 255, 0.1);
   border-left-color: rgba(255, 255, 255, 0.05);
   animation: spin 20s linear infinite reverse;
 }
 
 .ring-3 {
-  width: min(50vw, 420px);
-  height: min(50vw, 420px);
+  width: 50vw;
+  height: 50vw;
   border-top-color: rgba(245, 166, 35, 0.12);
   border-left-color: rgba(245, 166, 35, 0.06);
   animation: spin 15s linear infinite;
 }
 
 .ring-4 {
-  width: min(30vw, 240px);
-  height: min(30vw, 240px);
+  width: 30vw;
+  height: 30vw;
   border-bottom-color: rgba(255, 255, 255, 0.08);
   border-right-color: rgba(255, 255, 255, 0.04);
   animation: spin 12s linear infinite reverse;
@@ -239,8 +239,8 @@ tbody tr:hover {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: min(80vw, 700px);
-  height: min(80vw, 700px);
+  width: 80vw;
+  height: 80vw;
   transform: translate(-50%, -50%);
   background: radial-gradient(circle, rgba(245, 166, 35, 0.06) 0%, transparent 70%);
   animation: pulse 4s ease-in-out infinite;

@@ -58,9 +58,11 @@ services:
       - BENEFICIARY_REGISTRATION_FEE=2000
       - MERCHANT_REGISTRATION_FEE=3000
       - WALLETS_DIR=/app/data/wallets
+      - REGISTRY_DB_PATH=/app/data/registry.db
       - LISTEN=0.0.0.0:50051
     volumes:
       - wallets:/app/data/wallets
+      - registry-db:/app/data
     networks:
       - veiled
     depends_on:
@@ -127,3 +129,4 @@ networks:
 volumes:
   bitcoin-data:
   wallets:
+  registry-db:

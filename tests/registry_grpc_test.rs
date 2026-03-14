@@ -13,7 +13,7 @@ use veiled::registry::store::{FeeConfig, RegistryStore};
 #[tokio::test]
 async fn test_registry_integration() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "[::1]:50052".parse()?;
-    let store = Arc::new(Mutex::new(RegistryStore::new(None, FeeConfig::default())));
+    let store = Arc::new(Mutex::new(RegistryStore::new(None, FeeConfig::default(), None)));
     let service = RegistryService::new(store);
 
     let server_handle = tokio::spawn(async move {

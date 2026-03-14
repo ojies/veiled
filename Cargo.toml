@@ -56,6 +56,9 @@ tonic = "0.12"
 prost = "0.13"
 tokio-stream = "0.1"
 
+# Persistence
+rusqlite = { version = "0.31", features = ["bundled"] }
+
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 rand = "0.8"

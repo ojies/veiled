@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Start Registry ──────────────────────────────────────────
     separator("Starting Registry Server");
 
-    let store = Arc::new(Mutex::new(RegistryStore::new(None, FeeConfig::default())));
+    let store = Arc::new(Mutex::new(RegistryStore::new(None, FeeConfig::default(), None)));
     let registry_service = RegistryService::new(store);
     let registry_addr = REGISTRY_ADDR.parse()?;
 

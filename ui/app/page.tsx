@@ -266,8 +266,6 @@ export default function Home() {
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
             gap: "1.25rem",
-            maxWidth: "900px",
-            margin: "0 auto",
           }}
         >
           {PROTOCOL_STEPS.map((step, i) => (
@@ -343,8 +341,6 @@ export default function Home() {
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
             gap: "1.25rem",
-            maxWidth: "900px",
-            margin: "0 auto",
           }}
         >
           {PRIVACY_PROPERTIES.map((prop, i) => (
@@ -436,8 +432,6 @@ export default function Home() {
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
             gap: "1.25rem",
-            maxWidth: "800px",
-            margin: "0 auto",
           }}
         >
           {[
@@ -490,8 +484,6 @@ export default function Home() {
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
             gap: "1rem",
-            maxWidth: "800px",
-            margin: "0 auto",
           }}
         >
           {TECH_STACK.map((tech, i) => (

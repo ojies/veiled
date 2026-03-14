@@ -35,6 +35,10 @@ struct Args {
     /// Merchant registration fee in sats
     #[arg(long, env = "MERCHANT_REGISTRATION_FEE", default_value = "3000")]
     merchant_fee: u64,
+
+    /// SQLite database path for persistent state
+    #[arg(long, env = "REGISTRY_DB_PATH", default_value = "registry.db")]
+    db_path: String,
 }
 
 #[tokio::main]
@@ -66,10 +70,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fee_config.min_sats_per_user, fee_config.merchant_registration_fee
     );
 
-    let store = Arc::new(Mutex::new(RegistryStore::new(
-        Some(Arc::new(rpc_client)),
-        fee_config,
-    )));
+    info!("Opening database at {}", args.db_path);
+    let store = RegistryStore::open(Some(Arc::new(rpc_client)), fee_config, &args.db_path)
+        .map_err(|e| format!("Failed to initialize store: {e}"))?;
+    let store = Arc::new(Mutex::new(store));
     let registry_service = RegistryService::new(store);
 
     info!("Veiled gRPC Registry listening on {}", addr);

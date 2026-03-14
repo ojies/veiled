@@ -69,7 +69,7 @@ export default function RootLayout({
             style={{ opacity: 0.3 }}
           />
         </div>
-        <main style={{ padding: "1rem 1.5rem", maxWidth: "1400px", width: "100%", margin: "0 auto", flex: 1, position: "relative", zIndex: 1 }}>
+        <main style={{ padding: "1rem 1.5rem", width: "100%", flex: 1, position: "relative", zIndex: 1 }}>
           <ToastProvider>{children}</ToastProvider>
         </main>
         <footer

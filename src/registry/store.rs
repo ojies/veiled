@@ -2,12 +2,15 @@ use crate::core::registry::Registry;
 use crate::core::tx::{aggregate_secret_key, build_identity_tree, p2tr_script, sign_tx, IdentityTXO, IdentityTree};
 use crate::core::types::Commitment;
 use crate::core::Merchant;
+use crate::registry::db;
 use bdk_bitcoind_rpc::bitcoincore_rpc::{Client, RpcApi};
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{Address, Amount, Network, OutPoint, TxOut};
+use rusqlite::Connection as SqlConnection;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
+use tracing::info;
 
 pub struct MerchantInfo {
     pub merchant: Merchant,
@@ -47,22 +50,150 @@ pub struct RegistryStore {
     pub active_sets: HashMap<u64, ActiveSet>,
     pub rpc_client: Option<Arc<Client>>,
     pub fee_config: FeeConfig,
+    db: Option<SqlConnection>,
 }
 
 impl Default for RegistryStore {
     fn default() -> Self {
-        Self::new(None, FeeConfig::default())
+        Self::new(None, FeeConfig::default(), None)
     }
 }
 
 impl RegistryStore {
-    pub fn new(rpc_client: Option<Arc<Client>>, fee_config: FeeConfig) -> Self {
+    pub fn new(
+        rpc_client: Option<Arc<Client>>,
+        fee_config: FeeConfig,
+        db: Option<SqlConnection>,
+    ) -> Self {
         Self {
             merchant_pool: HashMap::new(),
             active_sets: HashMap::new(),
             rpc_client,
             fee_config,
+            db,
         }
+    }
+
+    /// Open SQLite at `path`, load persisted state, and return a ready store.
+    pub fn open(
+        rpc_client: Option<Arc<Client>>,
+        fee_config: FeeConfig,
+        db_path: &str,
+    ) -> Result<Self, String> {
+        let conn = db::open_db(db_path).map_err(|e| format!("Failed to open database: {}", e))?;
+        let state =
+            db::load_state(&conn).map_err(|e| format!("Failed to load database state: {}", e))?;
+
+        let mut store = Self::new(rpc_client, fee_config, Some(conn));
+
+        // 1. Replay merchants
+        for m in &state.merchants {
+            let merchant = Merchant::new(&m.name, &m.origin);
+            store.merchant_pool.insert(
+                m.name.clone(),
+                MerchantInfo {
+                    merchant,
+                    email: m.email.clone(),
+                    phone: m.phone.clone(),
+                },
+            );
+        }
+        info!("Restored {} merchants from database", state.merchants.len());
+
+        // 2. Replay sets (creates Registry + CRS via add_merchant + setup)
+        for s in &state.sets {
+            let mut merchants = Vec::new();
+            for m_name in &s.merchant_names {
+                let m_info = store.merchant_pool.get(m_name).ok_or_else(|| {
+                    format!(
+                        "DB inconsistency: set {} references unknown merchant '{}'",
+                        s.set_id, m_name
+                    )
+                })?;
+                merchants.push(m_info.merchant.clone());
+            }
+
+            let mut registry = Registry::new(s.beneficiary_capacity, s.sats_per_user);
+            for m in merchants {
+                registry.add_merchant(m);
+            }
+            registry.setup();
+
+            let (finalization_tx, _) = watch::channel(s.finalized);
+            store.active_sets.insert(
+                s.set_id,
+                ActiveSet {
+                    registry,
+                    beneficiary_capacity: s.beneficiary_capacity,
+                    sats_per_user: s.sats_per_user,
+                    finalized: false, // set after replaying commitments + tree
+                    tree: None,
+                    finalization_tx,
+                },
+            );
+        }
+        info!("Restored {} sets from database", state.sets.len());
+
+        // 3. Replay commitments (bypass on-chain verification)
+        let mut commitment_count = 0;
+        for c in &state.commitments {
+            let active_set = store.active_sets.get_mut(&c.set_id).ok_or_else(|| {
+                format!(
+                    "DB inconsistency: commitment references unknown set {}",
+                    c.set_id
+                )
+            })?;
+            let outpoint = OutPoint {
+                txid: c.txid,
+                vout: c.vout,
+            };
+            active_set.registry.add_beneficiary(c.phi, outpoint);
+            commitment_count += 1;
+        }
+        info!("Restored {} commitments from database", commitment_count);
+
+        // 4. Restore finalized sets with VTxO trees
+        for t in state.vtxo_trees {
+            let active_set = store.active_sets.get_mut(&t.set_id).ok_or_else(|| {
+                format!(
+                    "DB inconsistency: vtxo_tree references unknown set {}",
+                    t.set_id
+                )
+            })?;
+            // Reconstruct IdentityTXO list from anonymity set
+            let users: Vec<IdentityTXO> = active_set
+                .registry
+                .anonymity_set()
+                .iter()
+                .map(|phi| {
+                    let pk = bitcoin::secp256k1::PublicKey::from_slice(&phi.0)
+                        .expect("phi should be a valid compressed public key");
+                    IdentityTXO {
+                        pubkey: pk,
+                        amount: Amount::from_sat(active_set.sats_per_user),
+                    }
+                })
+                .collect();
+
+            active_set.tree = Some(IdentityTree {
+                root_tx: t.root_tx,
+                fanout_tx: t.fanout_tx,
+                users,
+            });
+            active_set.finalized = true;
+            let _ = active_set.finalization_tx.send(true);
+        }
+
+        // Mark finalized sets that might not have trees (edge case)
+        for s in &state.sets {
+            if s.finalized {
+                if let Some(active_set) = store.active_sets.get_mut(&s.set_id) {
+                    active_set.finalized = true;
+                }
+            }
+        }
+
+        Ok(store)
     }
 
     pub fn register_merchant(
@@ -80,10 +211,14 @@ impl RegistryStore {
             name.to_string(),
             MerchantInfo {
                 merchant,
-                email,
-                phone,
+                email: email.clone(),
+                phone: phone.clone(),
             },
         );
+        if let Some(ref conn) = self.db {
+            db::save_merchant(conn, name, origin, &email, &phone)
+                .map_err(|e| format!("DB error saving merchant: {}", e))?;
+        }
         Ok(())
     }
 
@@ -138,6 +273,11 @@ impl RegistryStore {
                 finalization_tx,
             },
         );
+
+        if let Some(ref conn) = self.db {
+            db::save_set(conn, set_id, beneficiary_capacity, sats_per_user, merchant_names)
+                .map_err(|e| format!("DB error saving set: {}", e))?;
+        }
 
         Ok(())
     }
@@ -222,6 +362,11 @@ impl RegistryStore {
         }
 
         let index = active_set.registry.add_beneficiary(phi, outpoint);
+
+        if let Some(ref conn) = self.db {
+            db::save_commitment(conn, set_id, index, &phi, &outpoint)
+                .map_err(|e| format!("DB error saving commitment: {}", e))?;
+        }
 
         Ok(index)
     }
@@ -308,6 +453,12 @@ impl RegistryStore {
         }
 
         active_set.finalized = true;
+        if let Some(ref conn) = self.db {
+            db::save_vtxo_tree(conn, set_id, &tree.root_tx, &tree.fanout_tx)
+                .map_err(|e| format!("DB error saving vtxo tree: {}", e))?;
+            db::mark_set_finalized(conn, set_id)
+                .map_err(|e| format!("DB error marking set finalized: {}", e))?;
+        }
         active_set.tree = Some(tree);
         let _ = active_set.finalization_tx.send(true);
 
