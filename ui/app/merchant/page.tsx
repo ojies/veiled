@@ -20,12 +20,6 @@ interface PaymentRow {
   address: string;
 }
 
-interface ExistingMerchant {
-  name: string;
-  port: number;
-  status: string;
-}
-
 const STEPS = [
   { label: "Create Wallet" },
   { label: "Register" },
@@ -52,9 +46,6 @@ export default function MerchantPage() {
   const [walletLoading, setWalletLoading] = useState(false);
   const [fees, setFees] = useState<{ beneficiary: number; merchant: number } | null>(null);
 
-  // Existing merchants (for switching)
-  const [existingMerchants, setExistingMerchants] = useState<ExistingMerchant[]>([]);
-
   // Dashboard
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
@@ -63,7 +54,7 @@ export default function MerchantPage() {
 
   const activeStep = !walletCreated ? 0 : !registered ? 1 : 2;
 
-  // Fetch fees and existing merchants on mount
+  // Fetch fees from registry on mount
   useEffect(() => {
     fetch("/api/setup/init", { method: "POST" })
       .then((r) => r.json())
@@ -71,53 +62,7 @@ export default function MerchantPage() {
         if (data.fees) setFees(data.fees);
       })
       .catch(() => {});
-    fetchExistingMerchants();
   }, []);
-
-  async function fetchExistingMerchants() {
-    try {
-      const res = await fetch("/api/state");
-      const data = await res.json();
-      const procs = data.merchant_processes || {};
-      const list: ExistingMerchant[] = Object.values(procs).map((p: any) => ({
-        name: p.name,
-        port: p.port,
-        status: p.status,
-      }));
-      setExistingMerchants(list);
-    } catch {
-      // ignore
-    }
-  }
-
-  function switchToMerchant(m: ExistingMerchant) {
-    const wName = `merchant-${m.name.toLowerCase().replace(/\s+/g, "-")}`;
-    setMerchantName(m.name);
-    setMerchantOrigin("");
-    setRegistered(true);
-    setServerPort(m.port);
-    setServerStatus(m.status);
-    setWalletName(wName);
-    setWalletCreated(true);
-    setWalletAddress("");
-    setWalletMnemonic("");
-    toast(`Switched to merchant "${m.name}"`, "success");
-  }
-
-  function switchToNewMerchant() {
-    setMerchantName("");
-    setMerchantOrigin("");
-    setRegistered(false);
-    setServerPort(0);
-    setServerStatus("");
-    setWalletName("");
-    setWalletCreated(false);
-    setWalletAddress("");
-    setWalletMnemonic("");
-    setIdentities([]);
-    setPayments([]);
-    fetchExistingMerchants();
-  }
 
   // Create wallet on name entry
   async function createWallet() {
@@ -209,7 +154,6 @@ export default function MerchantPage() {
       setServerPort(data.port);
       toast(`Merchant "${merchantName}" registered and server started`, "success");
       await refreshBalance();
-      fetchExistingMerchants();
     } catch (e: any) {
       const msg = e.message || "Registration failed";
       if (msg.includes("already")) {
@@ -282,69 +226,20 @@ export default function MerchantPage() {
   }
 
   const totalPayments = payments.reduce((sum, p) => sum + p.amount, 0);
-  // Other merchants the user can switch to (exclude the current one)
-  const otherMerchants = existingMerchants.filter((m) => m.name !== merchantName);
 
   return (
     <div className="fade-in">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.5rem" }}>
-        <h1 style={{ fontSize: "clamp(1.3rem, 5vw, 1.8rem)", fontWeight: 700 }}>
-          Merchant Dashboard
-          {registered && merchantName && (
-            <span style={{ color: "#f5a623", fontSize: "0.7em", marginLeft: "0.5rem" }}>
-              {merchantName}
-            </span>
-          )}
-        </h1>
-        {registered && (
-          <button
-            className="btn-outline"
-            onClick={switchToNewMerchant}
-            style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
-          >
-            Switch Merchant
-          </button>
+      <h1 style={{ fontSize: "clamp(1.3rem, 5vw, 1.8rem)", fontWeight: 700, marginBottom: "0.5rem" }}>
+        Merchant Dashboard
+        {registered && merchantName && (
+          <span style={{ color: "#f5a623", fontSize: "0.7em", marginLeft: "0.5rem" }}>
+            {merchantName}
+          </span>
         )}
-      </div>
+      </h1>
       <p style={{ color: "#666", marginBottom: "1.5rem" }}>
         Register your business, verify proofs, and process payments
       </p>
-
-      {/* Existing merchants — show when not registered yet */}
-      {!registered && existingMerchants.length > 0 && (
-        <div
-          className="card"
-          style={{ marginBottom: "1.5rem", padding: "1rem 1.25rem" }}
-        >
-          <h3 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.75rem" }}>
-            Existing Merchants
-          </h3>
-          <p style={{ color: "#888", fontSize: "0.8rem", marginBottom: "0.75rem" }}>
-            Resume as an existing merchant or create a new one below.
-          </p>
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-            {existingMerchants.map((m) => (
-              <button
-                key={m.name}
-                className="btn-outline"
-                onClick={() => switchToMerchant(m)}
-                style={{ fontSize: "0.8rem", padding: "0.4rem 0.75rem" }}
-              >
-                {m.name}
-                <span
-                  style={{
-                    marginLeft: "0.4rem",
-                    fontSize: "0.7rem",
-                    color: m.status === "running" ? "#4ade80" : "#f87171",
-                  }}
-                >
-                  {m.status}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       <Stepper steps={STEPS} activeStep={activeStep} />
 
@@ -471,23 +366,6 @@ export default function MerchantPage() {
               Auto-refresh
             </label>
           </div>
-
-          {/* Switch to other merchants inline */}
-          {otherMerchants.length > 0 && (
-            <div style={{ marginBottom: "1rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-              <span style={{ color: "#666", fontSize: "0.8rem" }}>Switch to:</span>
-              {otherMerchants.map((m) => (
-                <button
-                  key={m.name}
-                  className="btn-outline"
-                  onClick={() => switchToMerchant(m)}
-                  style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
-                >
-                  {m.name}
-                </button>
-              ))}
-            </div>
-          )}
 
           {/* Registered Beneficiaries */}
           <PhaseCard title="Registered Beneficiaries" defaultOpen active>
