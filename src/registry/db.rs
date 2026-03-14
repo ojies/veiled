@@ -61,7 +61,8 @@ fn create_tables(conn: &Connection) -> SqlResult<()> {
             set_id              INTEGER PRIMARY KEY,
             beneficiary_capacity INTEGER NOT NULL,
             sats_per_user       INTEGER NOT NULL,
-            finalized           INTEGER NOT NULL DEFAULT 0
+            finalized           INTEGER NOT NULL DEFAULT 0,
+            commitment_txid     TEXT
         );
 
         CREATE TABLE IF NOT EXISTS set_merchants (
@@ -163,10 +164,10 @@ pub fn load_wallet_mnemonic(conn: &Connection) -> SqlResult<Option<String>> {
     }
 }
 
-pub fn mark_set_finalized(conn: &Connection, set_id: u64) -> SqlResult<()> {
+pub fn mark_set_finalized(conn: &Connection, set_id: u64, commitment_txid: Option<&str>) -> SqlResult<()> {
     conn.execute(
-        "UPDATE sets SET finalized = 1 WHERE set_id = ?1",
-        params![set_id as i64],
+        "UPDATE sets SET finalized = 1, commitment_txid = ?2 WHERE set_id = ?1",
+        params![set_id as i64, commitment_txid],
     )?;
     Ok(())
 }

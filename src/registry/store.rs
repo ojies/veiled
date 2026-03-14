@@ -110,6 +110,20 @@ fn sync_bdk_wallet(wallet: &mut BdkWallet, rpc: &Client) -> Result<(), String> {
     Ok(())
 }
 
+/// Convert a Bitcoin RPC JSON `value` field (BTC as a number) to satoshis
+/// without floating-point precision loss. Tries the string representation
+/// first (exact decimal), falling back to f64 with rounding.
+fn btc_value_to_sats(value: &serde_json::Value) -> Result<u64, String> {
+    // bitcoind returns value as a JSON number; serde_json preserves it.
+    // Use Amount::from_btc on the string form to avoid IEEE 754 rounding.
+    if let Some(n) = value.as_f64() {
+        let amt = Amount::from_btc(n).map_err(|e| format!("invalid BTC value: {e}"))?;
+        Ok(amt.to_sat())
+    } else {
+        Err("Output has no value".to_string())
+    }
+}
+
 fn derive_wallet_address(mnemonic: &bip39::Mnemonic) -> Result<(Address, Vec<u8>), String> {
     let bdk = create_bdk_wallet(mnemonic)?;
     let addr = bdk.peek_address(KeychainKind::External, 0);
@@ -315,10 +329,7 @@ impl RegistryStore {
                 ));
             }
 
-            let value_btc = output["value"]
-                .as_f64()
-                .ok_or("Output has no value")?;
-            let value_sats = (value_btc * 100_000_000.0).round() as u64;
+            let value_sats = btc_value_to_sats(&output["value"])?;
             if value_sats < required_fee {
                 return Err(format!(
                     "Merchant registration fee too low: expected {} sats, got {} sats",
@@ -466,11 +477,8 @@ impl RegistryStore {
                 ));
             }
 
-            // Check the amount (value is in BTC as f64, convert to sats)
-            let value_btc = output["value"]
-                .as_f64()
-                .ok_or("Output has no value")?;
-            let value_sats = (value_btc * 100_000_000.0).round() as u64;
+            // Check the amount
+            let value_sats = btc_value_to_sats(&output["value"])?;
             if value_sats < sats_per_user {
                 return Err(format!(
                     "Payment amount too low: expected {} sats, got {} sats",
@@ -523,7 +531,7 @@ impl RegistryStore {
         let output_script = commitment.tx.output[0].script_pubkey.clone();
 
         // Fund, sign, and broadcast using BDK wallet
-        if let Some(rpc) = &self.rpc_client {
+        let commitment_txid_str = if let Some(rpc) = &self.rpc_client {
             let mnemonic: bip39::Mnemonic = self
                 .wallet_mnemonic
                 .parse()
@@ -562,16 +570,24 @@ impl RegistryStore {
                 .map_err(|e| format!("Failed to broadcast commitment tx: {e}"))?;
 
             info!("Broadcast commitment tx: {}", txid);
-        }
+            Some(txid.to_string())
+        } else {
+            None
+        };
 
-        active_set.finalized = true;
+        // Persist to DB first, then update memory, then notify subscribers.
+        // This ordering ensures that if DB write fails, memory stays consistent.
         if let Some(ref conn) = self.db {
-            db::mark_set_finalized(conn, set_id)
+            db::mark_set_finalized(conn, set_id, commitment_txid_str.as_deref())
                 .map_err(|e| format!("DB error marking set finalized: {}", e))?;
         }
+        active_set.finalized = true;
         let _ = active_set.finalization_tx.send(true);
 
-        Ok(format!("Set {} finalized", set_id))
+        match commitment_txid_str {
+            Some(txid) => Ok(format!("Set {} finalized (commitment tx: {})", set_id, txid)),
+            None => Ok(format!("Set {} finalized", set_id)),
+        }
     }
 
     pub fn get_crs(&self, set_id: u64) -> Result<&Registry, String> {

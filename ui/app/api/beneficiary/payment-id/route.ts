@@ -31,14 +31,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // Find merchant index (1-indexed)
-    const merchantIdx = state.merchants.findIndex((m) => m.name === merchant) + 1;
-    if (merchantIdx === 0) {
+    // Find merchant index (1-indexed for the protocol)
+    const rawIdx = state.merchants.findIndex((m) => m.name === merchant);
+    if (rawIdx === -1) {
       return NextResponse.json(
         { error: `unknown merchant '${merchant}'` },
         { status: 400 }
       );
     }
+    const merchantIdx = rawIdx + 1;
 
     // Generate ZK proof via helper
     const proofResult = createPaymentId({

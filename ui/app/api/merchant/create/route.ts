@@ -70,7 +70,7 @@ export async function POST(request: Request) {
 
     // Find the correct vout (the output paying the registry address)
     const txInfo = getTx(fundingTxid);
-    let fundingVout = 0;
+    let fundingVout = -1;
     if (txInfo.vout) {
       for (let i = 0; i < txInfo.vout.length; i++) {
         const output = txInfo.vout[i];
@@ -79,6 +79,12 @@ export async function POST(request: Request) {
           break;
         }
       }
+    }
+    if (fundingVout === -1) {
+      return NextResponse.json(
+        { error: `no output paying registry address in tx ${fundingTxid}` },
+        { status: 400 }
+      );
     }
 
     // Find available port

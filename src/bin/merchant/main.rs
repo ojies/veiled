@@ -134,11 +134,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let anonymity_set: Vec<Commitment> = anon_res
         .commitments
         .into_iter()
-        .map(|bytes| {
-            let arr: [u8; 33] = bytes.try_into().expect("commitment must be 33 bytes");
-            Commitment(arr)
+        .enumerate()
+        .map(|(i, bytes)| {
+            let arr: [u8; 33] = bytes
+                .try_into()
+                .map_err(|_| format!("commitment[{}] is not 33 bytes", i))?;
+            Ok(Commitment(arr))
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
     info!(
         "Set {} finalized: {} beneficiaries",
         args.set_id,

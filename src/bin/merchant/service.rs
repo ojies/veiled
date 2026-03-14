@@ -12,6 +12,7 @@ use crate::pb::{
     PaymentRequestResponse,
 };
 use bitcoin::Network;
+// TODO: make network configurable via environment variable for testnet/mainnet support
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
@@ -116,7 +117,7 @@ impl MerchantService for MerchantGrpcService {
             .get(&pseudonym)
             .ok_or_else(|| Status::not_found("pseudonym not registered with this merchant"))?;
 
-        let address = pseudonym_to_address(&pseudonym, Network::Bitcoin)
+        let address = pseudonym_to_address(&pseudonym, Network::Regtest)
             .map_err(|e| Status::internal(format!("failed to derive address: {}", e)))?;
 
         Ok(Response::new(PaymentRequestResponse {

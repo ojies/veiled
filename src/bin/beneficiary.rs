@@ -162,11 +162,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let anonymity_set: Vec<Commitment> = anon_res
         .commitments
         .into_iter()
-        .map(|bytes| {
-            let arr: [u8; 33] = bytes.try_into().expect("commitment must be 33 bytes");
-            Commitment(arr)
+        .enumerate()
+        .map(|(i, bytes)| {
+            let arr: [u8; 33] = bytes
+                .try_into()
+                .map_err(|_| format!("commitment[{}] is not 33 bytes", i))?;
+            Ok(Commitment(arr))
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
     info!(
         "Set {} finalized: {} members",
         args.set_id,
@@ -180,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     beneficiary.register(set_id_bytes, anonymity_set.clone())?;
     info!(
         "Registered locally at index {}",
-        beneficiary.index.unwrap()
+        beneficiary.index.ok_or("beneficiary index not set after registration")?
     );
 
     // 7. Optionally connect to merchant for Phase 3-5
@@ -217,7 +220,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .submit_payment_registration(PaymentRegistrationRequest {
                 pseudonym: payment_reg.pseudonym.to_vec(),
                 public_nullifier: payment_reg.public_nullifier.to_vec(),
-                set_id: u64::from_le_bytes(payment_reg.set_id[..8].try_into().unwrap()),
+                set_id: u64::from_le_bytes(
+                    payment_reg.set_id[..8]
+                        .try_into()
+                        .map_err(|_| "set_id slice conversion failed")?,
+                ),
                 service_index: payment_reg.service_index as u32,
                 friendly_name: payment_reg.friendly_name.clone(),
                 proof: proof_bytes,
