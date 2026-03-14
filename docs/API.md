@@ -14,7 +14,7 @@ routes via the web UI, and a wallet CLI binary.
 | `RegisterMerchant` | name, origin, email, phone, funding_txid, funding_vout | message | Pay fee + register a merchant (verifies payment on-chain, rejects duplicates) |
 | `CreateSet` | set_id, merchant_names, beneficiary_capacity, sats_per_user | message | Create anonymity set with CRS |
 | `RegisterBeneficiary` | set_id, phi (33 bytes), name, email, phone, funding_txid, funding_vout | message, index | Pay fee + register commitment in set (verifies payment on-chain) |
-| `FinalizeSet` | set_id | message | Seal set, self-fund + sign + broadcast Taproot commitment from collected beneficiary UTXOs |
+| `FinalizeSet` | set_id | message | Seal set, fund from wallet + sign + broadcast Taproot commitment |
 
 ### Queries
 
@@ -145,7 +145,7 @@ services, Rust helper binaries, and the Bitcoin wallet.
 
 | Route | Method | Input | Description |
 |-------|--------|-------|-------------|
-| `/api/wallet/create` | POST | `{ name, role }` | Create BDK wallet for any participant |
+| `/api/wallet/create` | POST | `{ name, role }` | Create wallet for any participant |
 | `/api/wallet/balance` | GET | `?name=X` | Sync wallet and return balance from bitcoind |
 | `/api/wallet/send` | POST | `{ from, to_address, amount }` | Send BTC, returns txid |
 | `/api/wallet/faucet` | POST | `{ names[] }` | Mine regtest blocks to fund listed wallets |
@@ -185,7 +185,7 @@ for chain synchronization. Communicates via JSON on stdin/stdout.
 - **No bitcoind wallet needed** — BDK manages keys, descriptors, and address
   derivation entirely locally. The binary never calls `createwallet` or
   `loadwallet` on bitcoind, eliminating "database already exists" errors.
-- **Ephemeral wallet recreation** — Each invocation recreates the BDK wallet
+- **Ephemeral wallet recreation** — Each invocation recreates the wallet
   from the stored mnemonic and descriptors. No persistent BDK database; the
   wallet is rebuilt from the JSON state file on every call.
 - **Emitter-based sync** — Uses `bdk_bitcoind_rpc::Emitter` to walk the chain
@@ -229,7 +229,7 @@ Optional: `rpc_url`, `rpc_user`, `rpc_pass` (defaults: `http://localhost:18443`,
 
 #### `get-balance`
 
-Recreate the BDK wallet from state, sync with bitcoind via Emitter, and return
+Recreate the wallet from state, sync with bitcoind via Emitter, and return
 the current balance.
 
 ```json
@@ -254,8 +254,8 @@ Get a new receive address from the wallet.
 
 #### `send`
 
-Recreate the BDK wallet from state, sync UTXOs, build a PSBT, sign with BDK,
-extract the final transaction, and broadcast via bitcoind RPC.
+Recreate the wallet from state, sync UTXOs, build a PSBT, sign, extract the
+final transaction, and broadcast via bitcoind RPC.
 
 ```json
 // Input
@@ -291,7 +291,7 @@ Look up transaction details from bitcoind.
 
 #### `get-tx-history`
 
-Recreate the BDK wallet from state, sync, and list all transactions using
+Recreate the wallet from state, sync, and list all transactions using
 `wallet.transactions()` and `wallet.sent_and_received()`. Classifies each
 transaction as incoming or outgoing based on net sats flow.
 

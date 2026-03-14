@@ -160,8 +160,8 @@ register their own commitments Φ_2 through Φ_8.
 ### Step 3: Set finalization
 
 Once all 8 beneficiaries have registered and paid, the set is finalized. No
-external funding is needed — the registry self-funds the commitment transaction
-from the beneficiary payment UTXOs it has collected.
+external funding is needed — the registry funds the commitment transaction
+from its wallet balance (accumulated from registration fees).
 
 ```
 FinalizeSet { set_id: 1 }
@@ -170,8 +170,8 @@ FinalizeSet { set_id: 1 }
 
 The registry:
 1. **Seals** the anonymity set (frozen permanently — no additions or removals)
-2. Creates a **Taproot commitment** transaction self-funded from beneficiary
-   payment UTXOs, signs all inputs with BIP341 Taproot key-spend, and broadcasts
+2. Creates a **Taproot commitment** transaction funded from its wallet balance,
+   signs, and broadcasts
 3. Notifies all subscribers via the streaming RPC
 
 ### Step 4: Alice receives the finalized set

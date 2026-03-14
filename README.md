@@ -63,7 +63,7 @@ full specification:
 │               ▼              ▼               ▼                         │
 │  ┌─────────────────┐  ┌───────────┐  ┌──────────────┐                 │
 │  │ Registry gRPC   │  │ veiled-   │  │ veiled-      │                 │
-│  │ :50051          │  │ helper    │  │ wallet       │                 │
+│  │ :50051          │  │ core      │  │ wallet       │                 │
 │  │                 │  │ (crypto)  │  │ (BDK/BIP86)  │                 │
 │  │ Merchant pool   │  └───────────┘  └──────┬───────┘                 │
 │  │ Anonymity sets  │                        │ RPC                     │
@@ -213,13 +213,13 @@ Test coverage:
 - [x] Beneficiary CLI with full Phase 1-5 flow
 - [x] Interactive web UI with role-based Beneficiary/Merchant flows
 - [x] `veiled-core` CLI bridge for Rust crypto operations from the web UI
-- [x] `veiled-wallet` BDK-based wallet binary (BIP86 P2TR, local key management, no bitcoind wallets)
+- [x] `veiled-wallet` wallet binary (BIP86 P2TR, local key management, no bitcoind wallets)
 - [x] Full protocol simulation (`simulation`) with 3 merchants and 8 beneficiaries
 - [x] On-chain registration fee verification (beneficiary + merchant)
-- [x] Self-funded Taproot commitment transaction (aggregates beneficiary payment UTXOs)
+- [x] Taproot commitment transaction funded from registry wallet
 - [x] Dynamic fee configuration via registry `GetFees` RPC
-- [x] Registry wallet (secp256k1 keypair persisted in SQLite, P2TR address for fee collection)
-- [x] Persistent storage for registry state (SQLite: merchants, sets, commitments, wallet key)
+- [x] Registry wallet (BIP39 mnemonic persisted in SQLite, P2TR address for fee collection)
+- [x] Persistent storage for registry state (SQLite: merchants, sets, commitments, wallet mnemonic)
 
 ### Phase 3-4 improvements (Payment Identity Registration)
 - [ ] Per-merchant nullifier duplicate rejection in the merchant service (currently verified in core but not enforced at the gRPC layer)

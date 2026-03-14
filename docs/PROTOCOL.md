@@ -11,7 +11,7 @@ for lightweight authentication.
 
 | Role | Description |
 |------|-------------|
-| **Registry** | Coordinates merchant registration, manages anonymity sets, generates the CRS, holds a persistent wallet (keypair in SQLite), collects registration fees, and creates self-funded Taproot commitments anchored on Bitcoin |
+| **Registry** | Coordinates merchant registration, manages anonymity sets, generates the CRS, holds a persistent wallet (BIP39 mnemonic in SQLite), collects registration fees, and creates Taproot commitments funded from its wallet and anchored on Bitcoin |
 | **Merchant** | Payment provider that verifies ZK proofs, stores pseudonymous identities, and sends Bitcoin payments |
 | **Beneficiary** | End user who creates a master credential, registers anonymously, and receives payments under unlinkable pseudonyms |
 
@@ -100,10 +100,10 @@ least `beneficiary_fee` sats, then adds Φ to the anonymity set.
 
 Once the set reaches its capacity, it is **finalized** — sealed permanently
 with no further additions or removals. The registry creates a **Taproot
-commitment** transaction self-funded from the collected beneficiary payment
-UTXOs, signs all inputs with BIP341 Taproot key-spend, and broadcasts it to
-Bitcoin. All subscribers are notified via the streaming RPC. The beneficiary
-downloads the frozen anonymity set, which is needed for proof generation.
+commitment** transaction funded from its wallet balance (which includes
+collected registration fees), and broadcasts it to Bitcoin. All subscribers
+are notified via the streaming RPC. The beneficiary downloads the frozen
+anonymity set, which is needed for proof generation.
 
 ### Funding and self-funded commitment
 
@@ -113,10 +113,11 @@ the address before any set exists. Fee amounts are configured on the registry
 and queried via `GetFees`. The registry verifies each payment on-chain via
 `getrawtransaction` before admitting participants.
 
-At finalization, the registry aggregates all beneficiary payment UTXOs as
-inputs to the commitment transaction, signs each input with BIP341 Taproot
-key-spend using its persisted wallet keypair, and broadcasts the signed
-transaction. No external funding outpoint is required.
+At finalization, the registry funds the commitment transaction from its
+wallet balance using automatic UTXO coin selection, signs, and broadcasts
+the transaction. No external funding outpoint is required — the wallet's
+balance (accumulated from registration fees) covers the commitment output
+and mining fees.
 
 ### Payment model
 

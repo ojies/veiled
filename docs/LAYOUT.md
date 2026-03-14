@@ -27,14 +27,14 @@ veiled/
 │   │   └── full_flow_test.rs          # End-to-end Phase 0-5 test
 │   ├── registry/                       # gRPC registry service
 │   │   ├── mod.rs                      # protobuf includes
-│   │   ├── db.rs                       # SQLite persistence (merchants, sets, commitments, wallet key)
-│   │   ├── store.rs                    # RegistryStore (state + wallet keypair, replays from SQLite on restart)
+│   │   ├── db.rs                       # SQLite persistence (merchants, sets, commitments, wallet mnemonic)
+│   │   ├── store.rs                    # RegistryStore (state + wallet via mnemonic, replays from SQLite on restart)
 │   │   └── service.rs                  # RegistryService (gRPC handlers)
 │   └── bin/
 │       ├── registry_grpc.rs            # Registry server entry point
 │       ├── beneficiary.rs              # Beneficiary CLI (Phases 1-5)
 │       ├── veiled_core.rs             # JSON helper for web UI crypto ops
-│       ├── veiled_wallet.rs           # BDK wallet binary (BIP86 P2TR, 7 commands)
+│       ├── veiled_wallet.rs           # Wallet binary (BIP86 P2TR, 7 commands)
 │       ├── simulation.rs              # Full protocol simulation (3 merchants, 8 beneficiaries)
 │       └── merchant/
 │           ├── main.rs                 # Merchant server entry point
@@ -59,7 +59,7 @@ veiled/
 │   ├── docker-registry-entrypoint.sh  # Registry container: wait for bitcoind, create wallet, start
 │   ├── docker-ui-entrypoint.sh        # UI container: wait for registry, start web UI
 │   └── docker-init-chain.sh           # Init container: create miner wallet, mine blocks, fund registry
-├── ui/                                 # Next.js web UI (React + TypeScript)
+├── ui/                                 # Web UI (Next.js, React + TypeScript)
 │   ├── app/
 │   │   ├── page.tsx                   # Landing page — role selector + protocol overview
 │   │   ├── demo/page.tsx             # Demo controls — launch, fund wallets, reset
