@@ -72,53 +72,8 @@ export default function BeneficiaryPage() {
   const [walletBalance, setWalletBalance] = useState(0);
   const [walletLoading, setWalletLoading] = useState(false);
 
-  // Manual merchant registration (shown on waiting screen)
-  const [regName, setRegName] = useState("");
-  const [regOrigin, setRegOrigin] = useState("");
-  const [regLoading, setRegLoading] = useState(false);
-
   // Incoming payments
   const [incomingTxs, setIncomingTxs] = useState<IncomingTx[]>([]);
-
-  // Register merchant from waiting screen
-  async function registerMerchantInline() {
-    if (!regName.trim() || !regOrigin.trim()) return;
-    setRegLoading(true);
-    try {
-      const res = await fetch("/api/merchant/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: regName.trim(), origin: regOrigin.trim() }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      toast(`Merchant "${regName}" created — initializing...`, "success");
-      await reinitAfterMerchant();
-    } catch (e: any) {
-      toast(e.message, "error");
-    }
-    setRegLoading(false);
-  }
-
-  // Re-run init after merchant creation to create set + fetch CRS
-  async function reinitAfterMerchant() {
-    try {
-      const res = await fetch("/api/setup/init", { method: "POST" });
-      const data = await res.json();
-      if (!data.waiting) {
-        setInitWaiting(false);
-        setInitDone(true);
-        setRegistryAddress(data.registry_address || "");
-        if (data.fees) setFees(data.fees);
-        if (data.merchants) {
-          setMerchants(data.merchants);
-          if (data.merchants.length) setSelectedMerchant(data.merchants[0].name);
-        }
-      }
-    } catch {
-      // polling will pick it up
-    }
-  }
 
   // Calculate active step
   const activeStep = !phi
@@ -230,6 +185,10 @@ export default function BeneficiaryPage() {
 
   async function createCredential() {
     if (!name.trim()) return;
+    if (!merchantsReady) {
+      toast("Not enough merchants registered in the registry. Register merchants first or use the seed merchant faucet on the Demo Controls page.", "error");
+      return;
+    }
     setLoading("credential");
     try {
       const data = await api("/api/beneficiary/credential", { name: name.trim() });
@@ -358,60 +317,7 @@ export default function BeneficiaryPage() {
     .filter((r) => r.status === "verified")
     .map((r) => r.merchant_name);
 
-  if (initWaiting) {
-    return (
-      <div>
-        <h1 style={{ fontSize: "clamp(1.3rem, 5vw, 1.8rem)", fontWeight: 700, marginBottom: "0.5rem" }}>
-          Beneficiary Dashboard
-        </h1>
-        <div className="card" style={{ padding: "2rem" }}>
-          <p style={{ color: "#f5a623", fontSize: "1.1rem", marginBottom: "0.5rem" }}>
-            No merchants registered yet
-          </p>
-          <p style={{ color: "#666", marginBottom: "1.5rem" }}>
-            Register a merchant below to get started, or use the seed merchant faucet on the{" "}
-            <a href="/demo" style={{ color: "#f5a623" }}>Demo Controls</a> page.
-          </p>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-            <input
-              type="text"
-              placeholder="Merchant name (e.g., CoffeeCo)"
-              value={regName}
-              onChange={(e) => setRegName(e.target.value)}
-              style={{
-                background: "#111",
-                border: "1px solid #333",
-                borderRadius: "0.5rem",
-                padding: "0.5rem 0.75rem",
-                color: "#fff",
-              }}
-            />
-            <input
-              type="text"
-              placeholder="Origin URL (e.g., https://coffeeco.com)"
-              value={regOrigin}
-              onChange={(e) => setRegOrigin(e.target.value)}
-              style={{
-                background: "#111",
-                border: "1px solid #333",
-                borderRadius: "0.5rem",
-                padding: "0.5rem 0.75rem",
-                color: "#fff",
-              }}
-            />
-            <button
-              className="btn"
-              onClick={registerMerchantInline}
-              disabled={regLoading || !regName.trim() || !regOrigin.trim()}
-            >
-              {regLoading ? "Registering..." : "Register Merchant"}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const merchantsReady = initDone && !initWaiting;
 
   return (
     <div className="fade-in">
@@ -423,6 +329,25 @@ export default function BeneficiaryPage() {
       </p>
 
       <Stepper steps={STEPS} activeStep={activeStep} />
+
+      {!merchantsReady && !phi && (
+        <div
+          style={{
+            background: "#1a1400",
+            border: "1px solid #f5a623",
+            borderRadius: "0.5rem",
+            padding: "0.75rem 1rem",
+            marginBottom: "1rem",
+            color: "#f5a623",
+            fontSize: "0.85rem",
+          }}
+        >
+          Waiting for merchants to register in the registry. Register merchants from the{" "}
+          <a href="/merchant" style={{ color: "#fff", textDecoration: "underline" }}>Merchant</a> page
+          or use the seed faucet on the{" "}
+          <a href="/demo" style={{ color: "#fff", textDecoration: "underline" }}>Demo Controls</a> page.
+        </div>
+      )}
 
       {/* Create Identity */}
       <PhaseCard
