@@ -317,7 +317,7 @@ export default function BeneficiaryPage() {
     return (
       <div>
         <h1 style={{ fontSize: "clamp(1.3rem, 5vw, 1.8rem)", fontWeight: 700, marginBottom: "0.5rem" }}>
-          Beneficiary Flow
+          Beneficiary Dashboard
         </h1>
         <div className="card" style={{ textAlign: "center", padding: "3rem" }}>
           <p style={{ color: "#f5a623", fontSize: "1.1rem" }}>
@@ -334,7 +334,7 @@ export default function BeneficiaryPage() {
   return (
     <div className="fade-in">
       <h1 style={{ fontSize: "clamp(1.3rem, 5vw, 1.8rem)", fontWeight: 700, marginBottom: "0.5rem" }}>
-        Beneficiary Flow
+        Beneficiary Dashboard
       </h1>
       <p style={{ color: "#666", marginBottom: "1.5rem" }}>
         Create your credential, register, and receive payments

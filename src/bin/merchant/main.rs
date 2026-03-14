@@ -1,3 +1,4 @@
+mod db;
 mod service;
 
 mod pb {
@@ -10,6 +11,9 @@ use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 use veiled::core::crs::Crs;
 use veiled::core::merchant::Merchant;
+use veiled::core::payment_identity::{
+    deserialize_payment_identity_registration_proof, PaymentIdentityRegistration,
+};
 use veiled::core::types::Commitment;
 use veiled::registry::pb::registry_client::RegistryClient;
 use veiled::registry::pb::{
@@ -50,6 +54,10 @@ struct Args {
     /// Funding output index within the payment transaction
     #[arg(long, default_value = "0")]
     funding_vout: u32,
+
+    /// Path to SQLite database for persistent identity storage
+    #[arg(long, default_value = "merchant.db")]
+    db_path: String,
 }
 
 #[tokio::main]
@@ -148,9 +156,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         anonymity_set.len()
     );
 
-    // 4. Create the core Merchant and start gRPC server
-    let merchant = Merchant::new(&args.name, &args.origin);
-    let merchant_service = MerchantGrpcService::new(merchant, crs, anonymity_set);
+    // 4. Open database and restore previously registered identities
+    let db_conn = db::open_db(&args.db_path)
+        .map_err(|e| format!("Failed to open merchant DB: {}", e))?;
+
+    let mut merchant = Merchant::new(&args.name, &args.origin);
+
+    let saved = db::load_identities(&db_conn)
+        .map_err(|e| format!("Failed to load identities: {}", e))?;
+    let restored = saved.len();
+    for row in saved {
+        let proof = deserialize_payment_identity_registration_proof(&row.proof_blob)
+            .map_err(|e| format!("Failed to deserialize stored proof: {}", e))?;
+        let reg = PaymentIdentityRegistration {
+            pseudonym: row.pseudonym,
+            public_nullifier: row.public_nullifier,
+            set_id: row.set_id,
+            service_index: row.service_index,
+            friendly_name: row.friendly_name,
+            proof,
+        };
+        merchant
+            .registered_identities
+            .insert(row.pseudonym, reg);
+    }
+    if restored > 0 {
+        info!("Restored {} registered identities from DB", restored);
+    }
+
+    // 5. Start gRPC server
+    let merchant_service = MerchantGrpcService::new(merchant, crs, anonymity_set, Some(db_conn));
 
     let addr = args.listen.parse()?;
     info!("Merchant '{}' listening on {}", args.name, addr);

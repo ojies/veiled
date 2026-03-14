@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+html {
+  scroll-behavior: smooth;
+}
+
 :root {
   --background: #0a0a0a;
   --foreground: #ededed;
@@ -287,11 +291,26 @@ tbody tr:hover {
   to { transform: translateY(60px); }
 }
 
+/* ── Nav links ── */
+
+.nav-link {
+  color: #666;
+  text-decoration: none;
+  transition: color 0.2s;
+  white-space: nowrap;
+}
+.nav-link:hover {
+  color: #f5a623;
+}
+
 /* ── Responsive ── */
 
 @media (max-width: 640px) {
   .nav-tagline {
     display: none;
+  }
+  .nav-links {
+    display: none !important;
   }
 
   .card {

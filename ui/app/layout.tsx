@@ -40,6 +40,8 @@ export default function RootLayout({
             position: "sticky",
             top: 0,
             zIndex: 50,
+            backdropFilter: "blur(12px)",
+            background: "rgba(10, 10, 10, 0.85)",
           }}
         >
           <a
@@ -60,6 +62,20 @@ export default function RootLayout({
           <span className="nav-tagline" style={{ color: "#666", fontSize: "0.85rem" }}>
             Verified Payments, Veiled Identities
           </span>
+          <div className="nav-links" style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "1.25rem",
+            marginLeft: "auto",
+            fontSize: "0.8rem",
+            fontWeight: 500,
+          }}>
+            <a href="/#about" className="nav-link">About</a>
+            <a href="/#how-it-works" className="nav-link">How It Works</a>
+            <a href="/#privacy" className="nav-link">Privacy</a>
+            <a href="/#architecture" className="nav-link">Architecture</a>
+            <a href="/#tech" className="nav-link">Tech</a>
+          </div>
         </nav>
         {/* Subtle global background animation */}
         <div className="app-bg">

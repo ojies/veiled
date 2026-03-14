@@ -231,13 +231,57 @@ export default function Home() {
         </div>
       </div>
 
-      {/* How Veiled Works — full-width section */}
+      {/* About */}
       <section
+        id="about"
         style={{
           marginTop: "4rem",
           padding: "3rem 1rem",
           borderTop: "1px solid #1a1a1a",
+          scrollMarginTop: "60px",
+          maxWidth: "800px",
+          margin: "4rem auto 0",
+        }}
+      >
+        <h2
+          style={{
+            textAlign: "center",
+            fontSize: "clamp(1.2rem, 4vw, 1.6rem)",
+            fontWeight: 700,
+            marginBottom: "1.5rem",
+          }}
+        >
+          About Veiled
+        </h2>
+        <p style={{ color: "#999", lineHeight: 1.8, fontSize: "0.92rem", marginBottom: "1rem" }}>
+          Veiled is a pseudonymous payment verification system on Bitcoin implementing
+          the <strong style={{ color: "#ededed" }}>Anonymous Self-Credentials (ASC)</strong> protocol
+          by Alupotha et al. It allows beneficiaries to receive payments from multiple
+          merchants while keeping their true identity private.
+        </p>
+        <p style={{ color: "#999", lineHeight: 1.8, fontSize: "0.92rem", marginBottom: "1rem" }}>
+          A beneficiary registers a single master credential once, derives an unlinkable
+          payment identity for each merchant using hash-based key derivation, and proves
+          ownership through a zero-knowledge proof without revealing which credential is
+          theirs among a public anonymity set. Each merchant receives a unique nullifier
+          that prevents Sybil attacks, while pseudonyms remain cryptographically unlinkable
+          across merchants.
+        </p>
+        <p style={{ color: "#999", lineHeight: 1.8, fontSize: "0.92rem" }}>
+          Once registered, beneficiaries authenticate via lightweight Schnorr signatures
+          and receive Bitcoin payments to P2TR addresses derived from their pseudonyms —
+          no further interaction with the registry required.
+        </p>
+      </section>
+
+      {/* How It Works */}
+      <section
+        id="how-it-works"
+        style={{
+          padding: "3rem 1rem",
+          borderTop: "1px solid #1a1a1a",
           background: "linear-gradient(180deg, transparent, #0d0d0d 40%)",
+          scrollMarginTop: "60px",
         }}
       >
         <h2
@@ -248,7 +292,7 @@ export default function Home() {
             marginBottom: "0.5rem",
           }}
         >
-          How Veiled Works
+          How It Works
         </h2>
         <p
           style={{
@@ -258,7 +302,7 @@ export default function Home() {
             fontSize: "0.9rem",
           }}
         >
-          Anonymous Self-Credentials on Bitcoin using Bootle/Groth ZK proofs
+          Six steps from credential creation to authenticated payment
         </p>
 
         <div
@@ -310,9 +354,11 @@ export default function Home() {
 
       {/* Privacy Properties */}
       <section
+        id="privacy"
         style={{
           padding: "3rem 1rem",
           borderTop: "1px solid #1a1a1a",
+          scrollMarginTop: "60px",
         }}
       >
         <h2
@@ -361,10 +407,12 @@ export default function Home() {
 
       {/* Architecture Overview */}
       <section
+        id="architecture"
         style={{
           padding: "3rem 1rem",
           borderTop: "1px solid #1a1a1a",
           background: "linear-gradient(180deg, transparent, #0d0d0d 40%)",
+          scrollMarginTop: "60px",
         }}
       >
         <h2
@@ -409,53 +457,14 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Numbers */}
-      <section
-        style={{
-          padding: "3rem 1rem",
-          borderTop: "1px solid #1a1a1a",
-        }}
-      >
-        <h2
-          style={{
-            textAlign: "center",
-            fontSize: "clamp(1.2rem, 4vw, 1.6rem)",
-            fontWeight: 700,
-            marginBottom: "2.5rem",
-          }}
-        >
-          By the Numbers
-        </h2>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-            gap: "1.25rem",
-          }}
-        >
-          {[
-            { value: "33", unit: "bytes", label: "Commitment size" },
-            { value: "65", unit: "bytes", label: "Schnorr proof" },
-            { value: "6", unit: "phases", label: "Protocol flow" },
-            { value: "0", unit: "trust", label: "Third parties" },
-          ].map((stat, i) => (
-            <div key={i} className="number-card">
-              <div className="number-value">
-                {stat.value}<span className="number-unit">{stat.unit}</span>
-              </div>
-              <div className="number-label">{stat.label}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
       {/* Built With */}
       <section
+        id="tech"
         style={{
           padding: "3rem 1rem",
           borderTop: "1px solid #1a1a1a",
           background: "linear-gradient(180deg, transparent, #0d0d0d 40%)",
+          scrollMarginTop: "60px",
         }}
       >
         <h2

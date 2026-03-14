@@ -222,8 +222,8 @@ Test coverage:
 - [x] Persistent storage for registry state (SQLite: merchants, sets, commitments, wallet mnemonic)
 
 ### Phase 3-4 improvements (Payment Identity Registration)
-- [ ] Per-merchant nullifier duplicate rejection in the merchant service (currently verified in core but not enforced at the gRPC layer)
-- [ ] Persistent storage for merchant registered identities (survives restarts)
+- [x] Per-merchant nullifier duplicate rejection in the merchant service (gRPC layer rejects duplicate nullifiers before delegating to core)
+- [x] Persistent storage for merchant registered identities (SQLite, restored on restart)
 - [ ] Privacy-preserving name binding — replace plaintext `friendly_name` with a commitment or blinded identifier to prevent cross-merchant linkage via name matching
 - [ ] Batch payment identity registration (register with multiple merchants in a single flow)
 
@@ -234,6 +234,9 @@ Test coverage:
 - [ ] On-chain P2TR spending path — enable beneficiaries to claim Taproot commitment outputs using their credential
 
 ### Infrastructure
+- [x] Docker Compose full-stack deployment (bitcoind, registry, web UI, block explorer)
+- [x] Automated chain initialization and registry funding
+- [x] Block explorer integration (mempool/electrs on regtest)
 - [ ] TLS for gRPC connections
 - [ ] Credential revocation / proof expiry
 - [ ] Anonymity set size scaling beyond current capacity
