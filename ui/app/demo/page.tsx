@@ -11,6 +11,7 @@ export default function DemoPage() {
   const { toast } = useToast();
   const [walletNames, setWalletNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [seedLoading, setSeedLoading] = useState(false);
 
   // Fetch current state to find all known wallets
   useEffect(() => {
@@ -31,6 +32,23 @@ export default function DemoPage() {
     };
     fetchState();
   }, []);
+
+  async function handleSeedMerchant() {
+    setSeedLoading(true);
+    try {
+      const res = await fetch("/api/setup/seed-merchants", { method: "POST" });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      if (data.existing) {
+        toast("Seed merchant already exists", "info");
+      } else {
+        toast(`Seed merchant created on port ${data.port}`, "success");
+      }
+    } catch (e: any) {
+      toast(e.message || "Seed merchant creation failed", "error");
+    }
+    setSeedLoading(false);
+  }
 
   async function handleReset() {
     setLoading(true);
@@ -116,6 +134,37 @@ export default function DemoPage() {
           style={{ fontSize: "1rem", padding: "0.65rem 2rem" }}
         >
           {loading ? "Launching..." : "Launch Demo"}
+        </button>
+      </div>
+
+      {/* Seed Merchant Faucet */}
+      <div
+        className="card"
+        style={{
+          marginBottom: "1.5rem",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "1rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <h3 style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
+            Seed Merchant
+          </h3>
+          <p style={{ color: "#888", fontSize: "0.85rem" }}>
+            Auto-create a funded, registered merchant so the beneficiary flow
+            can proceed without manual setup.
+          </p>
+        </div>
+        <button
+          className="btn"
+          onClick={handleSeedMerchant}
+          disabled={seedLoading}
+          style={{ flexShrink: 0 }}
+        >
+          {seedLoading ? "Creating..." : "Create Seed Merchant"}
         </button>
       </div>
 

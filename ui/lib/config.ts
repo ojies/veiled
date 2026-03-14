@@ -11,10 +11,10 @@ function intEnv(key: string, fallback: number): number {
 // ── Registry / Protocol ──
 
 /** Minimum number of merchants required before a set can be created */
-export const MIN_MERCHANTS = intEnv("MIN_MERCHANTS", 1);
+export const MIN_MERCHANTS = intEnv("MIN_MERCHANTS", 2);
 
 /** Number of beneficiary slots in each anonymity set (must be a power of 2) */
-export const BENEFICIARY_CAPACITY = intEnv("BENEFICIARY_CAPACITY", 2);
+export const BENEFICIARY_CAPACITY = intEnv("BENEFICIARY_CAPACITY", 4);
 
 /** Starting port for dynamically spawned merchant gRPC servers */
 export const MERCHANT_START_PORT = intEnv("MERCHANT_START_PORT", 50061);
@@ -23,4 +23,4 @@ export const MERCHANT_START_PORT = intEnv("MERCHANT_START_PORT", 50061);
 export const MERCHANT_STARTUP_DELAY = intEnv("MERCHANT_STARTUP_DELAY", 1500);
 
 /** Number of blocks mined to mature coinbase outputs */
-export const MATURITY_BLOCKS = intEnv("MATURITY_BLOCKS", 100);
+export const MATURITY_BLOCKS = intEnv("MATURITY_BLOCKS", 10);

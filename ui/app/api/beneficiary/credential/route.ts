@@ -14,7 +14,7 @@ export async function POST(request: Request) {
     const state = getState();
     if (!state.crs_hex) {
       return NextResponse.json(
-        { error: "system not set up — run /api/admin/setup first" },
+        { error: "System not initialized — register at least one merchant first" },
         { status: 400 }
       );
     }
