@@ -1,5 +1,5 @@
 // TypeScript wrapper for the veiled-wallet Rust binary.
-// Calls the binary via stdin/stdout JSON, same pattern as veiled-helper.
+// Calls the binary via stdin/stdout JSON, same pattern as veiled-core.
 
 import { execFileSync } from "child_process";
 import path from "path";

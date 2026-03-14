@@ -7,12 +7,11 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
 COPY proto/ proto/
-COPY demo/ demo/
 
 RUN cargo build --release \
     --bin veiled-registry-grpc \
     --bin merchant \
-    --bin veiled-helper \
+    --bin veiled-core \
     --bin veiled-wallet
 
 # ── Stage 2: Build Next.js UI ──
@@ -50,7 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app
 
 # Rust binaries the UI spawns at runtime
-COPY --from=rust-builder /build/target/release/veiled-helper /app/bin/veiled-helper
+COPY --from=rust-builder /build/target/release/veiled-core /app/bin/veiled-core
 COPY --from=rust-builder /build/target/release/veiled-wallet /app/bin/veiled-wallet
 COPY --from=rust-builder /build/target/release/merchant /app/bin/merchant
 
@@ -69,7 +68,7 @@ RUN chmod +x /entrypoint.sh
 RUN mkdir -p /app/data/wallets
 
 ENV WALLET_BIN=/app/bin/veiled-wallet \
-    HELPER_BIN=/app/bin/veiled-helper \
+    HELPER_BIN=/app/bin/veiled-core \
     MERCHANT_BIN=/app/bin/merchant \
     WALLETS_DIR=/app/data/wallets \
     PROTO_DIR=/app/proto \

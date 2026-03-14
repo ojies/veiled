@@ -3,11 +3,14 @@ use crate::core::types::Commitment;
 use crate::core::Merchant;
 use crate::registry::db;
 use bdk_bitcoind_rpc::bitcoincore_rpc::{Client, RpcApi};
+use bdk_bitcoind_rpc::Emitter;
+use bdk_wallet::bitcoin::bip32::Xpriv;
+use bdk_wallet::bitcoin::{FeeRate, Network as BdkNetwork};
+use bdk_wallet::template::Bip86;
+#[allow(deprecated)]
+use bdk_wallet::{KeychainKind, SignOptions, Wallet as BdkWallet};
 use bitcoin::hashes::Hash;
-use bitcoin::key::TapTweak;
-use bitcoin::secp256k1::{Keypair, Message, Secp256k1, SecretKey, XOnlyPublicKey};
-use bitcoin::sighash::{Prevouts, SighashCache, TapSighashType};
-use bitcoin::{Address, Amount, Network, OutPoint, ScriptBuf, Sequence, TxIn, TxOut, Witness};
+use bitcoin::{Address, Amount, Network, OutPoint};
 use rusqlite::Connection as SqlConnection;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,8 +29,6 @@ pub struct ActiveSet {
     pub sats_per_user: u64,
     pub finalized: bool,
     pub finalization_tx: watch::Sender<bool>,
-    /// Beneficiary payment UTXOs: (outpoint, value_sats).
-    pub funding_utxos: Vec<(OutPoint, u64)>,
 }
 
 /// Configuration for minimum fees enforced by the registry.
@@ -48,41 +49,80 @@ impl Default for FeeConfig {
     }
 }
 
-/// Fixed miner fee estimate (sats) for the commitment transaction on regtest.
-const MINER_FEE: u64 = 500;
-
 pub struct RegistryStore {
     pub merchant_pool: HashMap<String, MerchantInfo>,
     pub active_sets: HashMap<u64, ActiveSet>,
     pub rpc_client: Option<Arc<Client>>,
     pub fee_config: FeeConfig,
-    pub wallet_keypair: Keypair,
-    pub wallet_xonly: XOnlyPublicKey,
+    pub wallet_mnemonic: String,
     pub wallet_address: Address,
+    /// 32-byte x-only public key from the BDK wallet's P2TR address.
+    pub wallet_xonly_bytes: Vec<u8>,
     db: Option<SqlConnection>,
 }
 
-fn generate_keypair() -> Keypair {
+fn generate_mnemonic() -> bip39::Mnemonic {
+    let mut entropy = [0u8; 16];
     use rand_core::{OsRng, RngCore};
-    let mut sk_bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut sk_bytes);
-    let secp = Secp256k1::new();
-    let secret_key =
-        SecretKey::from_slice(&sk_bytes).expect("32 random bytes should be a valid secret key");
-    Keypair::from_secret_key(&secp, &secret_key)
+    OsRng.fill_bytes(&mut entropy);
+    bip39::Mnemonic::from_entropy(&entropy).expect("16 bytes should produce a valid mnemonic")
 }
 
-fn keypair_from_secret(sk_bytes: &[u8; 32]) -> Keypair {
-    let secp = Secp256k1::new();
-    let secret_key = SecretKey::from_slice(sk_bytes).expect("invalid secret key bytes");
-    Keypair::from_secret_key(&secp, &secret_key)
+/// Create an ephemeral BDK wallet from a mnemonic (BIP86 P2TR).
+fn create_bdk_wallet(mnemonic: &bip39::Mnemonic) -> Result<BdkWallet, String> {
+    let seed = mnemonic.to_seed("");
+    let xprv = Xpriv::new_master(BdkNetwork::Regtest, &seed)
+        .map_err(|e| format!("master key: {e}"))?;
+
+    BdkWallet::create(
+        Bip86(xprv, KeychainKind::External),
+        Bip86(xprv, KeychainKind::Internal),
+    )
+    .network(BdkNetwork::Regtest)
+    .create_wallet_no_persist()
+    .map_err(|e| format!("create wallet: {e}"))
 }
 
-fn derive_wallet_address(keypair: &Keypair) -> (XOnlyPublicKey, Address) {
-    let secp = Secp256k1::new();
-    let (xonly, _) = keypair.x_only_public_key();
-    let address = Address::p2tr(&secp, xonly, None, Network::Regtest);
-    (xonly, address)
+/// Sync a BDK wallet with bitcoind via Emitter.
+fn sync_bdk_wallet(wallet: &mut BdkWallet, rpc: &Client) -> Result<(), String> {
+    let tip = wallet.latest_checkpoint();
+    let empty_mempool: Vec<std::sync::Arc<bdk_wallet::bitcoin::Transaction>> = vec![];
+    let mut emitter = Emitter::new(rpc, tip.clone(), tip.height(), empty_mempool);
+
+    while let Some(block_event) = emitter
+        .next_block()
+        .map_err(|e| format!("sync block: {e}"))?
+    {
+        wallet
+            .apply_block_connected_to(
+                &block_event.block,
+                block_event.block_height(),
+                block_event.connected_to(),
+            )
+            .map_err(|e| format!("apply block: {e}"))?;
+    }
+
+    let mempool = emitter
+        .mempool()
+        .map_err(|e| format!("sync mempool: {e}"))?;
+    wallet.apply_unconfirmed_txs(mempool.update);
+
+    Ok(())
+}
+
+fn derive_wallet_address(mnemonic: &bip39::Mnemonic) -> Result<(Address, Vec<u8>), String> {
+    let bdk = create_bdk_wallet(mnemonic)?;
+    let addr = bdk.peek_address(KeychainKind::External, 0);
+    // Extract 32-byte x-only key from P2TR script (OP_1 <32 bytes>)
+    let script_bytes = addr.address.script_pubkey().to_bytes();
+    let xonly_bytes = script_bytes[2..34].to_vec();
+    // Convert from bdk_wallet::bitcoin::Address to bitcoin::Address
+    let addr_str = addr.address.to_string();
+    let address = addr_str
+        .parse::<Address<bitcoin::address::NetworkUnchecked>>()
+        .map_err(|e| format!("parse address: {e}"))
+        .map(|a| a.assume_checked())?;
+    Ok((address, xonly_bytes))
 }
 
 impl Default for RegistryStore {
@@ -97,16 +137,17 @@ impl RegistryStore {
         fee_config: FeeConfig,
         db: Option<SqlConnection>,
     ) -> Self {
-        let keypair = generate_keypair();
-        let (wallet_xonly, wallet_address) = derive_wallet_address(&keypair);
+        let mnemonic = generate_mnemonic();
+        let (wallet_address, wallet_xonly_bytes) =
+            derive_wallet_address(&mnemonic).expect("failed to derive wallet address");
         Self {
             merchant_pool: HashMap::new(),
             active_sets: HashMap::new(),
             rpc_client,
             fee_config,
-            wallet_keypair: keypair,
-            wallet_xonly,
+            wallet_mnemonic: mnemonic.to_string(),
             wallet_address,
+            wallet_xonly_bytes,
             db,
         }
     }
@@ -121,21 +162,24 @@ impl RegistryStore {
         let state =
             db::load_state(&conn).map_err(|e| format!("Failed to load database state: {}", e))?;
 
-        // Load or generate wallet keypair
-        let wallet_key = db::load_wallet_key(&conn)
-            .map_err(|e| format!("Failed to load wallet key: {}", e))?;
-        let keypair = if let Some(sk_bytes) = wallet_key {
-            info!("Loaded wallet keypair from database");
-            keypair_from_secret(&sk_bytes)
+        // Load or generate wallet mnemonic
+        let saved_mnemonic = db::load_wallet_mnemonic(&conn)
+            .map_err(|e| format!("Failed to load wallet mnemonic: {}", e))?;
+        let mnemonic_str = if let Some(m) = saved_mnemonic {
+            info!("Loaded wallet mnemonic from database");
+            m
         } else {
-            let kp = generate_keypair();
-            let sk = SecretKey::from_keypair(&kp);
-            db::save_wallet_key(&conn, &sk.secret_bytes())
-                .map_err(|e| format!("Failed to save wallet key: {}", e))?;
-            info!("Generated and saved new wallet keypair");
-            kp
+            let m = generate_mnemonic();
+            let s = m.to_string();
+            db::save_wallet_mnemonic(&conn, &s)
+                .map_err(|e| format!("Failed to save wallet mnemonic: {}", e))?;
+            info!("Generated and saved new wallet mnemonic");
+            s
         };
-        let (wallet_xonly, wallet_address) = derive_wallet_address(&keypair);
+        let mnemonic: bip39::Mnemonic = mnemonic_str
+            .parse()
+            .map_err(|e| format!("Failed to parse wallet mnemonic: {}", e))?;
+        let (wallet_address, wallet_xonly_bytes) = derive_wallet_address(&mnemonic)?;
         info!("Wallet address: {}", wallet_address);
 
         let mut store = Self {
@@ -143,9 +187,9 @@ impl RegistryStore {
             active_sets: HashMap::new(),
             rpc_client,
             fee_config,
-            wallet_keypair: keypair,
-            wallet_xonly,
+            wallet_mnemonic: mnemonic_str,
             wallet_address,
+            wallet_xonly_bytes,
             db: Some(conn),
         };
 
@@ -191,7 +235,6 @@ impl RegistryStore {
                     sats_per_user: s.sats_per_user,
                     finalized: false, // set after replaying commitments
                     finalization_tx,
-                    funding_utxos: Vec::new(),
                 },
             );
         }
@@ -211,7 +254,6 @@ impl RegistryStore {
                 vout: c.vout,
             };
             active_set.registry.add_beneficiary(c.phi, outpoint);
-            active_set.funding_utxos.push((outpoint, c.value));
             commitment_count += 1;
         }
         info!("Restored {} commitments from database", commitment_count);
@@ -349,7 +391,6 @@ impl RegistryStore {
                 sats_per_user,
                 finalized: false,
                 finalization_tx,
-                funding_utxos: Vec::new(),
             },
         );
 
@@ -392,7 +433,7 @@ impl RegistryStore {
         }
 
         // Verify payment on-chain if RPC client is available
-        let value_sats = if let Some(rpc) = &self.rpc_client {
+        if let Some(rpc) = &self.rpc_client {
             let expected_address = self.wallet_address.to_string();
 
             // Fetch the transaction from bitcoind
@@ -429,35 +470,29 @@ impl RegistryStore {
             let value_btc = output["value"]
                 .as_f64()
                 .ok_or("Output has no value")?;
-            let vs = (value_btc * 100_000_000.0).round() as u64;
-            if vs < sats_per_user {
+            let value_sats = (value_btc * 100_000_000.0).round() as u64;
+            if value_sats < sats_per_user {
                 return Err(format!(
                     "Payment amount too low: expected {} sats, got {} sats",
-                    sats_per_user, vs
+                    sats_per_user, value_sats
                 ));
             }
-            vs
-        } else {
-            // No RPC client (tests/demo) — assume sats_per_user
-            sats_per_user
-        };
+        }
 
         let index = active_set.registry.add_beneficiary(phi, outpoint);
-        active_set.funding_utxos.push((outpoint, value_sats));
 
         if let Some(ref conn) = self.db {
-            db::save_commitment(conn, set_id, index, &phi, &outpoint, value_sats)
+            db::save_commitment(conn, set_id, index, &phi, &outpoint)
                 .map_err(|e| format!("DB error saving commitment: {}", e))?;
         }
 
         Ok(index)
     }
 
-    /// Finalize the set: create Taproot commitment, sign, and broadcast.
+    /// Finalize the set: create Taproot commitment, fund via BDK wallet, and broadcast.
     ///
-    /// The registry self-funds the commitment transaction using the beneficiary
-    /// payment UTXOs it has collected. Each beneficiary payment becomes an input
-    /// to the commitment transaction.
+    /// The registry funds the commitment transaction from its BDK wallet balance.
+    /// BDK handles UTXO selection, fee estimation, signing, and change outputs.
     pub fn finalize_set(&mut self, set_id: u64) -> Result<String, String> {
         let active_set = self
             .active_sets
@@ -476,76 +511,57 @@ impl RegistryStore {
             ));
         }
 
-        let funding_utxos = active_set.funding_utxos.clone();
-        let total_input: u64 = funding_utxos.iter().map(|(_, v)| *v).sum();
-
-        // Create Taproot commitment (Merkle root of anonymity set).
-        // We pass a dummy outpoint; we'll replace inputs with actual beneficiary UTXOs.
+        // Create Taproot commitment to get the output script (Merkle root of anonymity set).
         let dummy_outpoint = OutPoint::null();
-        let mut commitment = active_set
+        let commitment = active_set
             .registry
             .create_anonymity_set(dummy_outpoint)
             .map_err(|e| format!("Failed to create Taproot commitment: {}", e))?;
 
-        // Replace the dummy input with actual beneficiary payment UTXOs
-        commitment.tx.input = funding_utxos
-            .iter()
-            .map(|(op, _)| TxIn {
-                previous_output: *op,
-                script_sig: ScriptBuf::new(),
-                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
-                witness: Witness::default(),
-            })
-            .collect();
+        // The commitment output amount is the total beneficiary fees for this set.
+        let output_amount = active_set.beneficiary_capacity as u64 * active_set.sats_per_user;
+        let output_script = commitment.tx.output[0].script_pubkey.clone();
 
-        // Adjust output value to account for miner fee
-        let output_value = total_input.saturating_sub(MINER_FEE);
-        commitment.tx.output[0].value = Amount::from_sat(output_value);
+        // Fund, sign, and broadcast using BDK wallet
+        if let Some(rpc) = &self.rpc_client {
+            let mnemonic: bip39::Mnemonic = self
+                .wallet_mnemonic
+                .parse()
+                .map_err(|e| format!("parse mnemonic: {e}"))?;
+            let mut bdk = create_bdk_wallet(&mnemonic)?;
+            sync_bdk_wallet(&mut bdk, rpc)?;
 
-        // Sign all inputs using BIP341 Taproot key-spend
-        if self.rpc_client.is_some() {
-            let secp = Secp256k1::new();
-            let tweaked_keypair = self.wallet_keypair.tap_tweak(&secp, None);
-            let wallet_script = self.wallet_address.script_pubkey();
+            // Convert the commitment output script to bdk_wallet::bitcoin types
+            let bdk_script =
+                bdk_wallet::bitcoin::ScriptBuf::from_bytes(output_script.to_bytes());
+            let bdk_amount = bdk_wallet::bitcoin::Amount::from_sat(output_amount);
 
-            let prevouts: Vec<TxOut> = funding_utxos
-                .iter()
-                .map(|(_, v)| TxOut {
-                    value: Amount::from_sat(*v),
-                    script_pubkey: wallet_script.clone(),
-                })
-                .collect();
-            let prevouts_ref: Vec<&TxOut> = prevouts.iter().collect();
+            let mut builder = bdk.build_tx();
+            builder
+                .add_recipient(bdk_script, bdk_amount)
+                .fee_rate(FeeRate::from_sat_per_vb(2).expect("valid fee rate"));
 
-            for i in 0..commitment.tx.input.len() {
-                let mut sighash_cache = SighashCache::new(&commitment.tx);
-                let sighash = sighash_cache
-                    .taproot_key_spend_signature_hash(
-                        i,
-                        &Prevouts::All(&prevouts_ref),
-                        TapSighashType::Default,
-                    )
-                    .map_err(|e| format!("Sighash computation failed for input {}: {}", i, e))?;
+            let mut psbt = builder
+                .finish()
+                .map_err(|e| format!("Failed to build commitment tx: {e}"))?;
 
-                let msg = Message::from_digest(sighash.to_byte_array());
-                let sig = secp.sign_schnorr(&msg, &tweaked_keypair.to_keypair());
-
-                let mut witness = Witness::new();
-                witness.push(sig.as_ref());
-                commitment.tx.input[i].witness = witness;
+            #[allow(deprecated)]
+            let finalized = bdk
+                .sign(&mut psbt, SignOptions::default())
+                .map_err(|e| format!("Failed to sign commitment tx: {e}"))?;
+            if !finalized {
+                return Err("Commitment transaction signing incomplete".into());
             }
 
-            // Broadcast the signed commitment transaction
-            self.rpc_client
-                .as_ref()
-                .unwrap()
-                .send_raw_transaction(&commitment.tx)
-                .map_err(|e| format!("Failed to broadcast commitment tx: {}", e))?;
+            let tx = psbt
+                .extract_tx()
+                .map_err(|e| format!("Failed to extract commitment tx: {e}"))?;
+            let txid = tx.compute_txid();
 
-            info!(
-                "Broadcast commitment tx: {}",
-                commitment.tx.compute_txid()
-            );
+            rpc.send_raw_transaction(&tx)
+                .map_err(|e| format!("Failed to broadcast commitment tx: {e}"))?;
+
+            info!("Broadcast commitment tx: {}", txid);
         }
 
         active_set.finalized = true;
@@ -586,7 +602,7 @@ impl RegistryStore {
 
         Ok((
             self.wallet_address.to_string(),
-            self.wallet_xonly.serialize().to_vec(),
+            self.wallet_xonly_bytes.clone(),
         ))
     }
 }

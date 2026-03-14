@@ -37,7 +37,6 @@ pub struct CommitmentRow {
     pub phi: Commitment,
     pub txid: Txid,
     pub vout: u32,
-    pub value: u64,
 }
 
 /// Open (or create) the SQLite database and ensure all tables exist.
@@ -78,13 +77,12 @@ fn create_tables(conn: &Connection) -> SqlResult<()> {
             phi    BLOB NOT NULL,
             txid   BLOB NOT NULL,
             vout   INTEGER NOT NULL,
-            value  INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (set_id, idx)
         );
 
         CREATE TABLE IF NOT EXISTS wallet (
-            id         INTEGER PRIMARY KEY CHECK (id = 1),
-            secret_key BLOB NOT NULL
+            id       INTEGER PRIMARY KEY CHECK (id = 1),
+            mnemonic TEXT NOT NULL
         );
         ",
     )?;
@@ -133,41 +131,33 @@ pub fn save_commitment(
     idx: usize,
     phi: &Commitment,
     outpoint: &OutPoint,
-    value: u64,
 ) -> SqlResult<()> {
     conn.execute(
-        "INSERT OR IGNORE INTO commitments (set_id, idx, phi, txid, vout, value) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT OR IGNORE INTO commitments (set_id, idx, phi, txid, vout) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             set_id as i64,
             idx as i64,
             &phi.0[..],
             &outpoint.txid.to_byte_array()[..],
             outpoint.vout,
-            value as i64,
         ],
     )?;
     Ok(())
 }
 
-pub fn save_wallet_key(conn: &Connection, secret_key: &[u8; 32]) -> SqlResult<()> {
+pub fn save_wallet_mnemonic(conn: &Connection, mnemonic: &str) -> SqlResult<()> {
     conn.execute(
-        "INSERT OR IGNORE INTO wallet (id, secret_key) VALUES (1, ?1)",
-        params![&secret_key[..]],
+        "INSERT OR IGNORE INTO wallet (id, mnemonic) VALUES (1, ?1)",
+        params![mnemonic],
     )?;
     Ok(())
 }
 
-pub fn load_wallet_key(conn: &Connection) -> SqlResult<Option<[u8; 32]>> {
-    let mut stmt = conn.prepare("SELECT secret_key FROM wallet WHERE id = 1")?;
-    let mut rows = stmt.query_map([], |row| {
-        let blob: Vec<u8> = row.get(0)?;
-        let arr: [u8; 32] = blob.try_into().map_err(|_| {
-            rusqlite::Error::InvalidColumnType(0, "secret_key".into(), rusqlite::types::Type::Blob)
-        })?;
-        Ok(arr)
-    })?;
+pub fn load_wallet_mnemonic(conn: &Connection) -> SqlResult<Option<String>> {
+    let mut stmt = conn.prepare("SELECT mnemonic FROM wallet WHERE id = 1")?;
+    let mut rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     match rows.next() {
-        Some(Ok(key)) => Ok(Some(key)),
+        Some(Ok(m)) => Ok(Some(m)),
         Some(Err(e)) => Err(e),
         None => Ok(None),
     }
@@ -243,7 +233,7 @@ fn load_sets(conn: &Connection) -> SqlResult<Vec<SetRow>> {
 
 fn load_commitments(conn: &Connection) -> SqlResult<Vec<CommitmentRow>> {
     let mut stmt = conn.prepare(
-        "SELECT set_id, idx, phi, txid, vout, value FROM commitments ORDER BY set_id, idx",
+        "SELECT set_id, idx, phi, txid, vout FROM commitments ORDER BY set_id, idx",
     )?;
     let rows = stmt.query_map([], |row| {
         let set_id: i64 = row.get(0)?;
@@ -251,7 +241,6 @@ fn load_commitments(conn: &Connection) -> SqlResult<Vec<CommitmentRow>> {
         let phi_blob: Vec<u8> = row.get(2)?;
         let txid_blob: Vec<u8> = row.get(3)?;
         let vout: u32 = row.get(4)?;
-        let value: i64 = row.get(5)?;
 
         let phi_arr: [u8; 33] = phi_blob
             .try_into()
@@ -266,7 +255,6 @@ fn load_commitments(conn: &Connection) -> SqlResult<Vec<CommitmentRow>> {
             phi: Commitment(phi_arr),
             txid: Txid::from_byte_array(txid_arr),
             vout,
-            value: value as u64,
         })
     })?;
     rows.collect()

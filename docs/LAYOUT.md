@@ -33,15 +33,13 @@ veiled/
 │   └── bin/
 │       ├── registry_grpc.rs            # Registry server entry point
 │       ├── beneficiary.rs              # Beneficiary CLI (Phases 1-5)
-│       ├── veiled_helper.rs           # JSON helper for web UI crypto ops
+│       ├── veiled_core.rs             # JSON helper for web UI crypto ops
 │       ├── veiled_wallet.rs           # BDK wallet binary (BIP86 P2TR, 7 commands)
+│       ├── simulation.rs              # Full protocol simulation (3 merchants, 8 beneficiaries)
 │       └── merchant/
 │           ├── main.rs                 # Merchant server entry point
 │           └── service.rs              # MerchantGrpcService handlers
-├── demo/
-│   └── simulate.rs                     # Full protocol simulation (3 merchants, 8 beneficiaries)
-├── docker/
-│   └── Dockerfile                      # Multi-stage: rust-builder → registry | ui targets
+├── Dockerfile                           # Multi-stage: rust-builder → registry | ui targets
 ├── docker-compose.yml                  # Full stack: bitcoind, explorer, registry, chain-init, ui
 ├── .github/
 │   └── workflows/
@@ -59,7 +57,7 @@ veiled/
 ├── scripts/
 │   ├── dev.sh                         # Launch via Docker Compose
 │   ├── docker-registry-entrypoint.sh  # Registry container: wait for bitcoind, create wallet, start
-│   ├── docker-ui-entrypoint.sh        # UI container: wait for registry, start Next.js
+│   ├── docker-ui-entrypoint.sh        # UI container: wait for registry, start web UI
 │   └── docker-init-chain.sh           # Init container: create miner wallet, mine blocks, fund registry
 ├── ui/                                 # Next.js web UI (React + TypeScript)
 │   ├── app/
@@ -85,7 +83,7 @@ veiled/
 │   └── lib/
 │       ├── config.ts                  # Centralized configuration (env var overrides)
 │       ├── grpc.ts                    # gRPC client (@grpc/grpc-js)
-│       ├── helper.ts                  # veiled-helper CLI wrapper
+│       ├── helper.ts                  # veiled-core CLI wrapper
 │       ├── wallet.ts                  # veiled-wallet CLI wrapper
 │       ├── state.ts                   # In-memory simulation state
 │       ├── types.ts                   # TypeScript interfaces

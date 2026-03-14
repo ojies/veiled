@@ -19,7 +19,7 @@ From the project root:
 This starts:
 1. `bitcoind` in regtest mode (port 18443)
 2. Registry gRPC server (port 50051)
-3. Next.js UI (port 3000)
+3. Web UI (port 3000)
 
 Merchants are created dynamically through the UI — no pre-started merchants.
 
@@ -27,7 +27,7 @@ Merchants are created dynamically through the UI — no pre-started merchants.
 
 ```
 ┌─────────────────────────────────────────┐
-│           Next.js Web UI (:3000)        │
+│              Web UI (:3000)             │
 │  Landing │ Beneficiary │ Merchant       │
 ├─────────────────────────────────────────┤
 │              API Routes                 │
@@ -88,14 +88,14 @@ The **faucet** button mines regtest blocks to fund wallets instantly.
 
 ## Docker Deployment
 
-The UI runs as a standalone Next.js container in Docker Compose. From the
+The UI runs as a standalone container in Docker Compose. From the
 project root:
 
 ```bash
 docker compose up --build
 ```
 
-The UI container bundles all Rust binaries (`veiled-helper`, `veiled-wallet`,
+The UI container bundles all Rust binaries (`veiled-core`, `veiled-wallet`,
 `merchant`) and spawns them as child processes. Configuration is via
 environment variables — see `docker-compose.yml` for the full list.
 
@@ -122,7 +122,7 @@ The UI expects:
 | `REGISTRY_ADDRESS` | `[::1]:50051` | Registry gRPC address |
 | `REGISTRY_SERVER` | `http://[::1]:50051` | Registry gRPC URL (for merchant binary) |
 | `WALLET_BIN` | `../target/release/veiled-wallet` | Path to wallet binary |
-| `HELPER_BIN` | `../target/release/veiled-helper` | Path to helper binary |
+| `HELPER_BIN` | `../target/release/veiled-core` | Path to helper binary |
 | `MERCHANT_BIN` | `../target/release/merchant` | Path to merchant binary |
 | `WALLETS_DIR` | `../.wallets` | Directory for wallet state files |
 | `PROTO_DIR` | `../proto` | Directory containing .proto files |

@@ -422,18 +422,18 @@ registry is required.
 
 ---
 
-## Running the Demo
+## Running the Simulation
 
-### CLI demo
+### CLI simulation
 
 To see all phases in action with 3 merchants (CoffeeCo, BookStore, TechMart)
 and 8 beneficiaries (Alice through Heidi):
 
 ```bash
-cargo run --bin demo --release
+cargo run --bin simulation --release
 ```
 
-The demo starts an in-process registry and merchant servers, runs all 8
+The simulation starts an in-process registry and merchant servers, runs all 8
 beneficiaries through Phases 1-5, and demonstrates cross-merchant pseudonym
 unlinkability with Alice registered at all three merchants.
 

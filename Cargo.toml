@@ -20,12 +20,12 @@ name = "merchant"
 path = "src/bin/merchant/main.rs"
 
 [[bin]]
-name = "demo"
-path = "demo/simulate.rs"
+name = "simulation"
+path = "src/bin/simulation.rs"
 
 [[bin]]
-name = "veiled-helper"
-path = "src/bin/veiled_helper.rs"
+name = "veiled-core"
+path = "src/bin/veiled_core.rs"
 
 [[bin]]
 name = "veiled-wallet"

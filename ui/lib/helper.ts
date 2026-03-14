@@ -1,11 +1,11 @@
-// Wrapper for the veiled-helper Rust CLI binary
+// Wrapper for the veiled-core Rust CLI binary
 
 import { execFileSync } from "child_process";
 import path from "path";
 
 const HELPER_BIN =
   process.env.HELPER_BIN ||
-  path.resolve(process.cwd(), "..", "target", "release", "veiled-helper");
+  path.resolve(process.cwd(), "..", "target", "release", "veiled-core");
 
 interface HelperResult {
   [key: string]: any;
@@ -31,7 +31,7 @@ function callHelper(command: string, params: Record<string, any>): HelperResult 
         throw new Error(out);
       }
     }
-    throw new Error(`veiled-helper failed: ${err.message}`);
+    throw new Error(`veiled-core failed: ${err.message}`);
   }
 }
 

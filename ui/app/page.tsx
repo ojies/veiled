@@ -76,7 +76,7 @@ const ARCHITECTURE_LAYERS = [
   },
   {
     label: "Crypto & Wallet",
-    items: ["veiled-helper (ZK proofs)", "veiled-wallet (BDK/BIP86)", "Schnorr signatures"],
+    items: ["veiled-core (ZK proofs)", "veiled-wallet (BDK/BIP86)", "Schnorr signatures"],
     color: "#4ade80",
   },
   {

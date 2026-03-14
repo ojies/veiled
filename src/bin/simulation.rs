@@ -1,9 +1,9 @@
-//! Veiled Demo: Full multi-party simulation
+//! Veiled Simulation: Full multi-party protocol simulation
 //!
 //! Runs an in-process registry + merchant servers and simulates the complete
 //! Phases 0-5 flow with 3 merchants and 8 beneficiaries.
 //!
-//! Usage: cargo run --bin demo --release
+//! Usage: cargo run --bin simulation --release
 
 mod merchant_pb {
     tonic::include_proto!("merchant");

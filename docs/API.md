@@ -1,7 +1,7 @@
 # API Reference
 
 Veiled exposes two gRPC services (Registry and Merchant), a set of REST API
-routes via the Next.js web UI, and a wallet CLI binary.
+routes via the web UI, and a wallet CLI binary.
 
 ---
 
@@ -128,10 +128,10 @@ message PaymentRequestResponse {
 
 ---
 
-## REST API routes (Next.js web UI)
+## REST API routes (web UI)
 
-These routes are served by the Next.js application and bridge the frontend
-to gRPC services, Rust helper binaries, and the Bitcoin wallet.
+These routes are served by the web UI and bridge the frontend to gRPC
+services, Rust helper binaries, and the Bitcoin wallet.
 
 ### Setup
 
@@ -305,10 +305,10 @@ transaction as incoming or outgoing based on net sats flow.
 
 ---
 
-## Helper CLI (`veiled-helper`)
+## Helper CLI (`veiled-core`)
 
 Rust binary that performs cryptographic operations for the web UI. Called
-by Next.js API routes via `execFileSync` with JSON stdin/stdout.
+by web UI API routes via `execFileSync` with JSON stdin/stdout.
 
 | Command | Description |
 |---------|-------------|

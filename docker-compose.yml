@@ -45,7 +45,7 @@ services:
   registry:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
       target: registry
     container_name: veiled-registry
     restart: unless-stopped
@@ -71,7 +71,7 @@ services:
   chain-init:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
       target: registry
     container_name: veiled-chain-init
     entrypoint: ["/bin/bash", "/init.sh"]
@@ -92,7 +92,7 @@ services:
   ui:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
       target: ui
     container_name: veiled-ui
     restart: unless-stopped
@@ -105,7 +105,7 @@ services:
       - REGISTRY_ADDRESS=registry:50051
       - REGISTRY_SERVER=http://registry:50051
       - WALLET_BIN=/app/bin/veiled-wallet
-      - HELPER_BIN=/app/bin/veiled-helper
+      - HELPER_BIN=/app/bin/veiled-core
       - MERCHANT_BIN=/app/bin/merchant
       - WALLETS_DIR=/app/data/wallets
       - PROTO_DIR=/app/proto

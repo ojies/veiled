@@ -2,7 +2,7 @@
 //!
 //! Reads a JSON command from stdin, executes the crypto operation,
 //! writes JSON result to stdout. No persistent state — the caller
-//! (Next.js API routes) manages state between calls.
+//! (web UI API routes) manages state between calls.
 //!
 //! Commands:
 //!   create-credential       Phase 1: generate secrets + compute Φ

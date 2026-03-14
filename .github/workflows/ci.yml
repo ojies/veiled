@@ -65,7 +65,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build registry image
-        run: docker build -f docker/Dockerfile --target registry -t veiled-registry .
+        run: docker build -f Dockerfile --target registry -t veiled-registry .
 
       - name: Build UI image
-        run: docker build -f docker/Dockerfile --target ui -t veiled-ui .
+        run: docker build -f Dockerfile --target ui -t veiled-ui .

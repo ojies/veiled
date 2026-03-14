@@ -55,9 +55,9 @@ full specification:
 ```
 ┌── Docker Compose ──────────────────────────────────────────────────────┐
 │                                                                        │
-│  ┌─ Next.js Web UI (:3000) ──────────────────────────────────────────┐ │
+│  ┌─ Web UI (:3000) ─────────────────────────────────────────────────┐ │
 │  │  Landing: "I am a Beneficiary" / "I am a Merchant"                │ │
-│  │  API routes → gRPC + veiled-helper + veiled-wallet                │ │
+│  │  API routes → gRPC + veiled-core + veiled-wallet                │ │
 │  └────────────┬──────────────┬──────────────┬────────────────────────┘ │
 │               │ gRPC         │ child_process │ child_process           │
 │               ▼              ▼               ▼                         │
@@ -158,12 +158,12 @@ cargo run --bin beneficiary -- \
   --payment-amount 5000
 ```
 
-#### Run the demo
+#### Run the simulation
 
 Self-contained simulation with 3 merchants and 8 beneficiaries:
 
 ```bash
-cargo run --bin demo --release
+cargo run --bin simulation --release
 ```
 
 #### Run the web UI
@@ -211,10 +211,10 @@ Test coverage:
 - [x] P2TR address derivation from pseudonyms (Phase 5)
 - [x] gRPC services for registry and merchant
 - [x] Beneficiary CLI with full Phase 1-5 flow
-- [x] Interactive web UI (Next.js) with role-based Beneficiary/Merchant flows
-- [x] `veiled-helper` CLI bridge for Rust crypto operations from the web UI
+- [x] Interactive web UI with role-based Beneficiary/Merchant flows
+- [x] `veiled-core` CLI bridge for Rust crypto operations from the web UI
 - [x] `veiled-wallet` BDK-based wallet binary (BIP86 P2TR, local key management, no bitcoind wallets)
-- [x] Full protocol simulation (`demo`) with 3 merchants and 8 beneficiaries
+- [x] Full protocol simulation (`simulation`) with 3 merchants and 8 beneficiaries
 - [x] On-chain registration fee verification (beneficiary + merchant)
 - [x] Self-funded Taproot commitment transaction (aggregates beneficiary payment UTXOs)
 - [x] Dynamic fee configuration via registry `GetFees` RPC
