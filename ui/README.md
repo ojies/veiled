@@ -2,6 +2,10 @@
 
 Interactive demo of the Veiled pseudonymous payment protocol on Bitcoin. Each participant (registry, merchants, beneficiaries) has a real Bitcoin wallet on regtest with live transactions.
 
+The landing page has a **Launch Demo** button that funds the registry wallet and opens `MIN_MERCHANTS` merchant tabs and `BENEFICIARY_CAPACITY` beneficiary tabs automatically. Each tab receives a `?tab=N` URL parameter that pre-fills a unique default name (e.g. "Merchant 1", "Beneficiary 2"). All per-tab state (wallet, credential, step progress) is stored in sessionStorage, so tabs are fully isolated from each other.
+
+The **Demo Controls** page (`/demo`) provides utilities for the demo environment: a seed merchant faucet (auto-create a funded registered merchant), fund all wallets, and reset.
+
 ## Prerequisites
 
 - **Rust** (cargo)
@@ -68,6 +72,8 @@ The **faucet** button mines regtest blocks to fund wallets instantly.
 | Route | Method | Description |
 |-------|--------|-------------|
 | `/api/setup/init` | POST | Lazy set creation from registered merchants |
+| `/api/setup/seed-merchants` | POST | Auto-create funded merchant (seed faucet) |
+| `/api/config` | GET | Return `{ minMerchants, beneficiaryCapacity }` |
 | `/api/merchant/create` | POST | Spawn merchant gRPC server |
 | `/api/wallet/create` | POST | Create wallet for any participant |
 | `/api/wallet/balance` | GET | Query wallet balance |
@@ -126,8 +132,8 @@ The UI expects:
 | `MERCHANT_BIN` | `../target/release/merchant` | Path to merchant binary |
 | `WALLETS_DIR` | `../.wallets` | Directory for wallet state files |
 | `PROTO_DIR` | `../proto` | Directory containing .proto files |
-| `BENEFICIARY_CAPACITY` | `2` | Slots per anonymity set (must be power of 2) |
-| `MIN_MERCHANTS` | `1` | Minimum merchants before set creation |
+| `BENEFICIARY_CAPACITY` | `4` | Slots per anonymity set (must be power of 2) |
+| `MIN_MERCHANTS` | `2` | Minimum merchants before set creation |
 | `MERCHANT_START_PORT` | `50061` | Starting port for merchant gRPC servers |
 | `MERCHANT_STARTUP_DELAY` | `1500` | Wait time (ms) after spawning merchant |
-| `MATURITY_BLOCKS` | `100` | Blocks mined to mature coinbase outputs |
+| `MATURITY_BLOCKS` | `10` | Blocks mined to mature coinbase outputs |

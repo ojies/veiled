@@ -62,11 +62,13 @@ veiled/
 ├── ui/                                 # Web UI (Next.js, React + TypeScript)
 │   ├── app/
 │   │   ├── page.tsx                   # Landing page — role selector + protocol overview
-│   │   ├── demo/page.tsx             # Demo controls — launch, fund wallets, reset
+│   │   ├── demo/page.tsx             # Demo controls — seed merchants, fund wallets, reset
 │   │   ├── beneficiary/page.tsx      # Beneficiary flow (credential → register → receive payment)
 │   │   ├── merchant/page.tsx         # Merchant dashboard (registrations + send payments)
 │   │   └── api/                       # API routes
 │   │       ├── setup/init/            # Lazy set creation from registered merchants
+│   │       ├── setup/seed-merchants/  # Auto-create funded seed merchant (demo faucet)
+│   │       ├── config/                # Return MIN_MERCHANTS + BENEFICIARY_CAPACITY
 │   │       ├── wallet/                # create, balance, send, faucet, tx
 │   │       ├── beneficiary/           # credential, register, finalize, payment-id, payment, incoming
 │   │       ├── merchant/              # create, identities, payments

@@ -114,8 +114,10 @@ Services:
 | bitcoind | localhost:18443 | Bitcoin Core regtest node |
 
 A chain-init container automatically creates a miner wallet, mines initial
-blocks, and funds the registry. Merchants are created dynamically through
-the UI.
+blocks, and funds the registry. Open [localhost:3000](http://localhost:3000)
+and click **Launch Demo** to automatically open `MIN_MERCHANTS` merchant tabs
+and `BENEFICIARY_CAPACITY` beneficiary tabs. Use the
+[Demo Controls](/demo) page to seed merchants, fund wallets, or reset state.
 
 Works with Docker or Podman (images use `docker.io/` prefix).
 

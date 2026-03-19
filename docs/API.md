@@ -138,6 +138,8 @@ services, Rust helper binaries, and the Bitcoin wallet.
 | Route | Method | Description |
 |-------|--------|-------------|
 | `/api/setup/init` | POST | Lazy set creation from registered merchants (idempotent) |
+| `/api/setup/seed-merchants` | POST | Auto-create a funded, registered merchant (faucet for demo use) |
+| `/api/config` | GET | Return `{ minMerchants, beneficiaryCapacity }` from server config |
 | `/api/state` | GET | Current simulation state |
 | `/api/reset` | POST | Reset all state and kill spawned processes |
 
