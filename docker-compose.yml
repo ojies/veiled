@@ -114,6 +114,7 @@ services:
       # Protocol configuration
       - BENEFICIARY_CAPACITY=4
       - MIN_MERCHANTS=2
+      - MATURITY_BLOCKS=10
       - MERCHANT_START_PORT=50061
     volumes:
       - wallets:/app/data/wallets
