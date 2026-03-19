@@ -28,9 +28,13 @@ const STEPS = [
 
 export default function MerchantPage() {
   const { toast } = useToast();
+  const [tabIndex] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("tab");
+  });
 
-  // Persisted state (survives page refresh)
-  const [merchantName, setMerchantName] = useSessionState("merch:name", "");
+  // Persisted state (per-tab via sessionStorage)
+  const [merchantName, setMerchantName] = useSessionState("merch:name", tabIndex ? `Merchant ${tabIndex}` : "");
   const [merchantOrigin, setMerchantOrigin] = useSessionState("merch:origin", "");
   const [registered, setRegistered] = useSessionState("merch:registered", false);
   const [serverPort, setServerPort] = useSessionState("merch:port", 0);

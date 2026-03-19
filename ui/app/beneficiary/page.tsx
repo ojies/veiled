@@ -6,7 +6,7 @@ import PhaseCard from "@/components/PhaseCard";
 import WalletCard from "@/components/WalletCard";
 import HexDisplay from "@/components/HexDisplay";
 import { useToast } from "@/components/ToastProvider";
-import { useLocalState } from "@/lib/useLocalState";
+import { useSessionState } from "@/lib/useLocalState";
 
 interface Merchant {
   name: string;
@@ -44,19 +44,23 @@ const STEPS = [
 
 export default function BeneficiaryPage() {
   const { toast } = useToast();
+  const [tabIndex] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("tab");
+  });
 
-  // Persisted state (survives page refresh)
-  const [name, setName] = useLocalState("ben:name", "");
-  const [phi, setPhi] = useLocalState<string | null>("ben:phi", null);
-  const [regIndex, setRegIndex] = useLocalState<number | null>("ben:regIndex", null);
-  const [setStatus, setSetStatus] = useLocalState<{ count: number; capacity: number } | null>("ben:setStatus", null);
-  const [finalized, setFinalized] = useLocalState("ben:finalized", false);
-  const [registrations, setRegistrations] = useLocalState<Registration[]>("ben:registrations", []);
-  const [payments, setPayments] = useLocalState<Payment[]>("ben:payments", []);
-  const [walletAddress, setWalletAddress] = useLocalState("ben:walletAddr", "");
-  const [walletMnemonic, setWalletMnemonic] = useLocalState("ben:walletMnemonic", "");
-  const [walletCreated, setWalletCreated] = useLocalState("ben:walletCreated", false);
-  const [registryAddress, setRegistryAddress] = useLocalState("ben:registryAddr", "");
+  // Persisted state (per-tab via sessionStorage)
+  const [name, setName] = useSessionState("ben:name", tabIndex ? `Beneficiary ${tabIndex}` : "");
+  const [phi, setPhi] = useSessionState<string | null>("ben:phi", null);
+  const [regIndex, setRegIndex] = useSessionState<number | null>("ben:regIndex", null);
+  const [setStatus, setSetStatus] = useSessionState<{ count: number; capacity: number } | null>("ben:setStatus", null);
+  const [finalized, setFinalized] = useSessionState("ben:finalized", false);
+  const [registrations, setRegistrations] = useSessionState<Registration[]>("ben:registrations", []);
+  const [payments, setPayments] = useSessionState<Payment[]>("ben:payments", []);
+  const [walletAddress, setWalletAddress] = useSessionState("ben:walletAddr", "");
+  const [walletMnemonic, setWalletMnemonic] = useSessionState("ben:walletMnemonic", "");
+  const [walletCreated, setWalletCreated] = useSessionState("ben:walletCreated", false);
+  const [registryAddress, setRegistryAddress] = useSessionState("ben:registryAddr", "");
 
   // Fee config from server
   const [fees, setFees] = useState<{ beneficiary: number; merchant: number } | null>(null);

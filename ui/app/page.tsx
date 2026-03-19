@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { useToast } from "@/components/ToastProvider";
 
 function Particles({ count }: { count: number }) {
   const items = useMemo(() => {
@@ -124,6 +125,31 @@ const PROTOCOL_STEPS = [
 
 export default function Home() {
   const router = useRouter();
+  const { toast } = useToast();
+  const [launching, setLaunching] = useState(false);
+
+  async function handleLaunchDemo() {
+    setLaunching(true);
+    try {
+      toast("Setting up demo...", "info");
+      await fetch("/api/wallet/faucet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ names: ["registry"] }),
+      });
+      const { minMerchants, beneficiaryCapacity } = await fetch("/api/config").then((r) => r.json());
+      for (let i = 0; i < minMerchants; i++) {
+        window.open(`/merchant?tab=${i + 1}`, "_blank");
+      }
+      for (let i = 0; i < beneficiaryCapacity; i++) {
+        window.open(`/beneficiary?tab=${i + 1}`, "_blank");
+      }
+      toast(`Opened ${minMerchants} merchant + ${beneficiaryCapacity} beneficiary tabs`, "success");
+    } catch (e: any) {
+      toast(e.message || "Launch failed", "error");
+    }
+    setLaunching(false);
+  }
 
   return (
     <>
@@ -219,14 +245,22 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Launch Demo button */}
-        <div style={{ marginTop: "2rem" }}>
+        {/* Launch Demo */}
+        <div style={{ marginTop: "2rem", display: "flex", gap: "1rem", justifyContent: "center", flexWrap: "wrap" }}>
           <button
             className="btn"
-            onClick={() => router.push("/demo")}
+            onClick={handleLaunchDemo}
+            disabled={launching}
             style={{ fontSize: "1rem", padding: "0.65rem 2.5rem" }}
           >
-            Launch Demo
+            {launching ? "Launching..." : "Launch Demo"}
+          </button>
+          <button
+            className="btn-outline"
+            onClick={() => router.push("/demo")}
+            style={{ fontSize: "1rem", padding: "0.65rem 2rem" }}
+          >
+            Demo Controls
           </button>
         </div>
       </div>

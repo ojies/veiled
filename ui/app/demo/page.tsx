@@ -1,13 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import FaucetButton from "@/components/FaucetButton";
 import { useToast } from "@/components/ToastProvider";
 import { clearAllLocalState } from "@/lib/useLocalState";
 
 export default function DemoPage() {
-  const router = useRouter();
   const { toast } = useToast();
   const [walletNames, setWalletNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -63,26 +61,6 @@ export default function DemoPage() {
     setLoading(false);
   }
 
-  async function handleLaunchDemo() {
-    setLoading(true);
-    try {
-      // 1. Fund registry wallet
-      toast("Setting up demo...", "info");
-      await fetch("/api/wallet/faucet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ names: ["registry"] }),
-      });
-
-      // 2. Open merchant page in new tab, beneficiary in current
-      window.open("/merchant", "_blank");
-      router.push("/beneficiary");
-    } catch (e: any) {
-      toast(e.message || "Launch failed", "error");
-    }
-    setLoading(false);
-  }
-
   return (
     <div className="fade-in" style={{ maxWidth: "700px", margin: "0 auto" }}>
       <h1
@@ -95,47 +73,8 @@ export default function DemoPage() {
         Demo Controls
       </h1>
       <p style={{ color: "#666", marginBottom: "2rem" }}>
-        Manage your demo environment &mdash; fund wallets, reset state, or launch a
-        fresh demo session.
+        Manage your demo environment &mdash; seed merchants, fund wallets, or reset state.
       </p>
-
-      {/* Launch Demo */}
-      <div
-        className="card"
-        style={{
-          marginBottom: "1.5rem",
-          textAlign: "center",
-          padding: "2rem",
-        }}
-      >
-        <h2
-          style={{
-            fontSize: "1.2rem",
-            fontWeight: 600,
-            marginBottom: "0.75rem",
-          }}
-        >
-          Launch Demo
-        </h2>
-        <p
-          style={{
-            color: "#999",
-            marginBottom: "1.25rem",
-            fontSize: "0.9rem",
-          }}
-        >
-          Funds the registry wallet, opens the Merchant dashboard in a new tab,
-          and navigates to the Beneficiary flow.
-        </p>
-        <button
-          className="btn"
-          onClick={handleLaunchDemo}
-          disabled={loading}
-          style={{ fontSize: "1rem", padding: "0.65rem 2rem" }}
-        >
-          {loading ? "Launching..." : "Launch Demo"}
-        </button>
-      </div>
 
       {/* Seed Merchant Faucet */}
       <div
