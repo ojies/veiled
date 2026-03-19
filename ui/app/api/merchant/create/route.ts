@@ -8,7 +8,6 @@ import { createWallet, getBalance, send, faucet, getTx } from "@/lib/wallet";
 import { getRegistryClient, grpcCall } from "@/lib/grpc";
 import {
   MERCHANT_START_PORT,
-  MERCHANT_STARTUP_DELAY,
   MATURITY_BLOCKS,
 } from "@/lib/config";
 
@@ -142,8 +141,43 @@ export async function POST(request: Request) {
       if (proc) proc.status = "stopped";
     });
 
-    // Give it a moment to start
-    await new Promise((r) => setTimeout(r, MERCHANT_STARTUP_DELAY));
+    // Poll the registry until the merchant appears in GetMerchants (max ~15s)
+    const maxWaitMs = 15_000;
+    const pollIntervalMs = 500;
+    const deadline = Date.now() + maxWaitMs;
+    let confirmed = false;
+
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      try {
+        const merchantsResp: any = await grpcCall(registry, "GetMerchants", {});
+        const registered = (merchantsResp.merchants || []).some(
+          (m: any) => m.name === name
+        );
+        if (registered) {
+          confirmed = true;
+          break;
+        }
+      } catch {
+        // registry not ready yet, keep polling
+      }
+
+      // Also bail if the process already exited
+      const proc = state.merchant_processes[name];
+      if (proc?.status === "stopped") {
+        return NextResponse.json(
+          { error: `Merchant process exited before completing registration` },
+          { status: 500 }
+        );
+      }
+    }
+
+    if (!confirmed) {
+      return NextResponse.json(
+        { error: "Merchant registration timed out — check registry logs" },
+        { status: 500 }
+      );
+    }
 
     const balance = getBalance(walletName);
 
@@ -153,7 +187,7 @@ export async function POST(request: Request) {
       address: wallet.address,
       wallet_name: walletName,
       balance: balance.total,
-      status: state.merchant_processes[String(name)]?.status ?? "starting",
+      status: "running",
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

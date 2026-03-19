@@ -6,7 +6,7 @@ import PhaseCard from "@/components/PhaseCard";
 import WalletCard from "@/components/WalletCard";
 import HexDisplay from "@/components/HexDisplay";
 import { useToast } from "@/components/ToastProvider";
-import { useLocalState } from "@/lib/useLocalState";
+import { useSessionState } from "@/lib/useLocalState";
 
 interface Identity {
   beneficiary: string;
@@ -30,14 +30,14 @@ export default function MerchantPage() {
   const { toast } = useToast();
 
   // Persisted state (survives page refresh)
-  const [merchantName, setMerchantName] = useLocalState("merch:name", "");
-  const [merchantOrigin, setMerchantOrigin] = useLocalState("merch:origin", "");
-  const [registered, setRegistered] = useLocalState("merch:registered", false);
-  const [serverPort, setServerPort] = useLocalState("merch:port", 0);
-  const [walletAddress, setWalletAddress] = useLocalState("merch:walletAddr", "");
-  const [walletMnemonic, setWalletMnemonic] = useLocalState("merch:walletMnemonic", "");
-  const [walletName, setWalletName] = useLocalState("merch:walletName", "");
-  const [walletCreated, setWalletCreated] = useLocalState("merch:walletCreated", false);
+  const [merchantName, setMerchantName] = useSessionState("merch:name", "");
+  const [merchantOrigin, setMerchantOrigin] = useSessionState("merch:origin", "");
+  const [registered, setRegistered] = useSessionState("merch:registered", false);
+  const [serverPort, setServerPort] = useSessionState("merch:port", 0);
+  const [walletAddress, setWalletAddress] = useSessionState("merch:walletAddr", "");
+  const [walletMnemonic, setWalletMnemonic] = useSessionState("merch:walletMnemonic", "");
+  const [walletName, setWalletName] = useSessionState("merch:walletName", "");
+  const [walletCreated, setWalletCreated] = useSessionState("merch:walletCreated", false);
 
   // Ephemeral state
   const [serverStatus, setServerStatus] = useState("");

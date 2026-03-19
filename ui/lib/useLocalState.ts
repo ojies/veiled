@@ -40,3 +40,38 @@ export function clearAllLocalState() {
   const keys = Object.keys(localStorage).filter((k) => k.startsWith(PREFIX));
   keys.forEach((k) => localStorage.removeItem(k));
 }
+
+/**
+ * Like useLocalState, but backed by sessionStorage so each tab is independent.
+ * Use this for pages where multiple tabs should maintain separate state
+ * (e.g. running different merchants in different tabs).
+ */
+export function useSessionState<T>(key: string, initial: T): [T, (val: T | ((prev: T) => T)) => void, () => void] {
+  const storageKey = PREFIX + key;
+
+  const [value, setValue] = useState<T>(() => {
+    if (typeof window === "undefined") return initial;
+    try {
+      const stored = sessionStorage.getItem(storageKey);
+      if (stored) return JSON.parse(stored);
+    } catch {
+      // ignore parse errors
+    }
+    return initial;
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(value));
+    } catch {
+      // ignore quota errors
+    }
+  }, [storageKey, value]);
+
+  const clear = useCallback(() => {
+    sessionStorage.removeItem(storageKey);
+    setValue(initial);
+  }, [storageKey, initial]);
+
+  return [value, setValue, clear];
+}
