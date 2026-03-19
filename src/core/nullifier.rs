@@ -208,7 +208,7 @@ mod tests {
         let names: Vec<Name> = (0..10).map(|i| Name::new(format!("service-{i}"))).collect();
         let pns = derive_all_public_nullifiers(&s, &names, &g);
         assert_eq!(pns.len(), 10);
-        let unique: std::collections::HashSet<_> = pns.iter().map(|p| *p).collect();
+        let unique: std::collections::HashSet<_> = pns.iter().copied().collect();
         assert_eq!(unique.len(), 10);
     }
 

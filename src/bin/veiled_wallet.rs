@@ -41,6 +41,7 @@ struct Command {
 // ── Parameter structs ──
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct CreateWalletParams {
     state_path: String,
     name: String,
@@ -58,6 +59,7 @@ struct GetBalanceParams {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct GetAddressParams {
     state_path: String,
     rpc_url: Option<String>,
@@ -622,8 +624,8 @@ mod tests {
 
     #[test]
     fn unknown_command_returns_error() {
-        let r: Result<serde_json::Value, String> = Err(format!("unknown command: {}", "bogus"));
-        assert_eq!(r.unwrap_err(), "unknown command: bogus");
+        let msg = format!("unknown command: {}", "bogus");
+        assert_eq!(msg, "unknown command: bogus");
     }
 
     // ── BIP39 / BIP86 key derivation ──

@@ -172,6 +172,7 @@ pub struct PaymentIdentityRegistrationProof {
 /// - `nullifier_scalars`: all L nullifier scalars `s_1..s_L`.
 /// - `pseudonym`: `ϕ = csk_l · g` (33-byte compressed point).
 /// - `public_nullifier`: `nul_l = s_l · g` (33-byte compressed point).
+#[allow(clippy::too_many_arguments)]
 pub fn prove_payment_identity_registration(
     crs: &Crs,
     anonymity_set: &[Commitment],
@@ -288,10 +289,9 @@ pub fn prove_payment_identity_registration(
         }
     }
 
-    for j in 0..N {
+    for (j, dj) in d_set.iter().enumerate().take(N) {
         let mut poly = [Scalar::ZERO; M + 1];
         poly[0] = Scalar::ONE;
-        let mut deg = 0usize;
 
         for k in 0..M {
             let jk = ((j >> k) & 1) as u64;
@@ -301,16 +301,14 @@ pub fn prove_payment_identity_registration(
                 (Scalar::ONE - bits[k], -a[k])
             };
 
-            for i in (0..=deg).rev() {
+            for i in (0..=k).rev() {
                 poly[i + 1] += poly[i] * coeff_x;
-                poly[i] = poly[i] * coeff_0;
+                poly[i] *= coeff_0;
             }
-            deg += 1;
         }
 
-        let dj = d_set[j];
         for m in 0..M {
-            cap_e[m] += dj * poly[m];
+            cap_e[m] += *dj * poly[m];
         }
     }
 
@@ -343,9 +341,9 @@ pub fn prove_payment_identity_registration(
     // z_m = s_m·x^M - Σ_k ρ_m[k]·x^k (for each m ≠ l)
     let mut x_pow = Scalar::ONE;
     let mut x_powers = [Scalar::ZERO; M + 1];
-    for k in 0..=M {
-        x_powers[k] = x_pow;
-        x_pow = x_pow * x;
+    for xp in x_powers.iter_mut() {
+        *xp = x_pow;
+        x_pow *= x;
     }
 
     // Build witness scalars: [k, s_{m≠l}, name_scalar]
@@ -453,8 +451,8 @@ pub fn verify_payment_identity_registration_proof(
     let cap_d = match point_from_bytes(&proof.d) { Some(p) => p, None => return false };
     let cap_e: [ProjectivePoint; M] = {
         let mut arr = [ProjectivePoint::IDENTITY; M];
-        for k in 0..M {
-            arr[k] = match point_from_bytes(&proof.e_poly[k]) { Some(p) => p, None => return false };
+        for (k, slot) in arr.iter_mut().enumerate() {
+            *slot = match point_from_bytes(&proof.e_poly[k]) { Some(p) => p, None => return false };
         }
         arr
     };
@@ -510,17 +508,17 @@ pub fn verify_payment_identity_registration_proof(
     // By Schwartz-Zippel: if this holds for random x, the polynomial identity
     // holds formally, proving D_j is a commitment-to-zero at the prover's index.
     let mut lhs3 = ProjectivePoint::IDENTITY;
-    for j in 0..N {
+    for (j, dj) in d_set.iter().enumerate().take(N) {
         let mut pj = Scalar::ONE;
-        for k in 0..M {
+        for (k, fk) in f.iter().enumerate().take(M) {
             let jk = ((j >> k) & 1) as u64;
             if jk == 1 {
-                pj = pj * f[k];
+                pj *= *fk;
             } else {
-                pj = pj * (x - f[k]);
+                pj *= x - *fk;
             }
         }
-        lhs3 += d_set[j] * pj;
+        lhs3 += *dj * pj;
     }
 
     // RHS: z_g·g + Σ_{m≠l} z_m·h_m + z_name·h_name + Σ_k x^k·E[k]
@@ -546,9 +544,9 @@ pub fn verify_payment_identity_registration_proof(
 
     // Σ_k x^k · E[k]
     let mut x_pow = Scalar::ONE;
-    for k in 0..M {
-        rhs3 += cap_e[k] * x_pow;
-        x_pow = x_pow * x;
+    for ei in cap_e.iter() {
+        rhs3 += *ei * x_pow;
+        x_pow *= x;
     }
 
     if lhs3.to_affine() != rhs3.to_affine() {
@@ -626,7 +624,7 @@ pub fn deserialize_payment_identity_registration_proof(b: &[u8]) -> Result<Payme
         return Err(format!("proof too short: {} bytes (minimum {})", b.len(), PROOF_BASE_SIZE));
     }
     let z_bytes = b.len() - PROOF_BASE_SIZE;
-    if z_bytes % 32 != 0 {
+    if !z_bytes.is_multiple_of(32) {
         return Err(format!("z_responses portion ({z_bytes} bytes) not a multiple of 32"));
     }
 
@@ -677,7 +675,7 @@ mod tests {
     use crate::core::credential::MasterCredential;
     use crate::core::merchant::Merchant;
     use crate::core::nullifier::derive_public_nullifier;
-    use crate::core::types::{BlindingKey, ChildRandomness, FriendlyName, MasterSecret, Name};
+    use crate::core::types::{BlindingKey, ChildRandomness, FriendlyName, MasterSecret};
 
     fn make_provider(name: &str) -> Merchant {
         Merchant::new(name, &format!("https://{name}"))

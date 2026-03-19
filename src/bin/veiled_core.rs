@@ -17,7 +17,7 @@ use veiled::core::beneficiary::Beneficiary;
 use veiled::core::credential::MasterCredential;
 use veiled::core::crs::Crs;
 use veiled::core::payment_identity::serialize_payment_identity_registration_proof;
-use veiled::core::request::{create_payment_request, PaymentRequestProof};
+use veiled::core::request::create_payment_request;
 use veiled::core::types::{
     BlindingKey, ChildRandomness, Commitment, FriendlyName, MasterSecret, Name,
 };

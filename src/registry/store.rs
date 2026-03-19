@@ -9,8 +9,7 @@ use bdk_wallet::bitcoin::{FeeRate, Network as BdkNetwork};
 use bdk_wallet::template::Bip86;
 #[allow(deprecated)]
 use bdk_wallet::{KeychainKind, SignOptions, Wallet as BdkWallet};
-use bitcoin::hashes::Hash;
-use bitcoin::{Address, Amount, Network, OutPoint};
+use bitcoin::{Address, Amount, OutPoint};
 use rusqlite::Connection as SqlConnection;
 use std::collections::HashMap;
 use std::sync::Arc;

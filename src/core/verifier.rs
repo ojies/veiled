@@ -215,7 +215,7 @@ mod tests {
     use crate::core::credential::MasterCredential;
     use crate::core::merchant::Merchant;
     use crate::core::payment_identity::prove_payment_identity_registration;
-    use crate::core::types::{BlindingKey, ChildRandomness, FriendlyName, MasterSecret, Name};
+    use crate::core::types::{BlindingKey, ChildRandomness, FriendlyName, MasterSecret};
 
     fn make_provider(name: &str) -> Merchant {
         Merchant::new(name, &format!("https://{name}"))

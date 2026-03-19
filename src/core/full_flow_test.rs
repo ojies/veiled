@@ -9,16 +9,13 @@
 //!   Phase 4: Merchant 1 verifies Alice's proof via receive_payment_registration
 //!   Phase 5: Payment address derivation + name revelation
 
-use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Amount, Network, OutPoint, Txid};
 
 use crate::core::beneficiary::Beneficiary;
 use crate::core::merchant::Merchant;
-use crate::core::payment_identity::{verify_name_revelation, serialize_payment_identity_registration_proof, deserialize_payment_identity_registration_proof};
+use crate::core::payment_identity::verify_name_revelation;
 use crate::core::registry::Registry;
 use crate::core::request::{create_payment_request, pseudonym_to_address, verify_payment_request};
-use crate::core::tx::{IdentityTXO, build_identity_tree};
-use crate::core::utils::M;
 
 const L: usize = 3;
 const SET_SIZE: usize = 8; // N = 2^3

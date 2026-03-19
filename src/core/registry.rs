@@ -29,6 +29,7 @@ use crate::core::types::Commitment;
 /// 2. `add_merchant()` — accumulate merchants.
 /// 3. `setup()` — create the CRS from collected merchants (Phase 0 complete).
 /// 4. `add_beneficiary()` — collect Φ commitments (Phase 2).
+///
 /// A Taproot commitment transaction anchoring the anonymity set on-chain.
 #[derive(Debug, Clone)]
 pub struct TaprootCommitment {

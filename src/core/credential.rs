@@ -264,11 +264,12 @@ mod tests {
     fn register_finds_own_phi() {
         let crs = make_crs(3);
         let mut target = make_beneficiary(&crs, 0x42, "target");
-        let mut set = Vec::new();
-        set.push(make_credential(&crs, 0x01).phi);
-        set.push(make_credential(&crs, 0x02).phi);
-        set.push(target.credential.phi);
-        set.push(make_credential(&crs, 0x03).phi);
+        let set = vec![
+            make_credential(&crs, 0x01).phi,
+            make_credential(&crs, 0x02).phi,
+            target.credential.phi,
+            make_credential(&crs, 0x03).phi,
+        ];
 
         target.register([0u8; 32], set).unwrap();
         assert_eq!(target.index, Some(2));

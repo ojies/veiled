@@ -287,7 +287,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let reg = beneficiaries[ben_idx]
             .create_payment_registration(&crs, merchant_id)
-            .map_err(|e| format!("{}", e))?;
+            .map_err(|e| e.to_string())?;
         let proof_bytes = serialize_payment_identity_registration_proof(&reg.proof);
 
         let req = PaymentRegistrationRequest {
