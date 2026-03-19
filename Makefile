@@ -8,6 +8,8 @@
 #   make clean        # stop + remove data (wallets, db, regtest chain)
 #   make build-rust   # rebuild Rust binaries only
 #   make build-ui     # rebuild UI deps only
+#   make logs         # tail last 20 lines of each service log
+#   make status       # show running/stopped state of each service
 
 SHELL := /bin/bash
 
@@ -55,7 +57,7 @@ else
 endif
 
 .PHONY: setup dev stop clean build-rust build-ui start-bitcoind start-registry \
-        init-chain start-ui check-node install-node
+        init-chain start-ui check-node logs status
 
 # ═══════════════════════════════════════════════════════════════
 # Setup (one-time)
@@ -185,6 +187,7 @@ start-ui:
 		PROTO_DIR=$(ROOT)/proto \
 		BENEFICIARY_CAPACITY=4 \
 		MIN_MERCHANTS=2 \
+		MATURITY_BLOCKS=10 \
 		MERCHANT_START_PORT=50061 \
 		PORT=$(UI_PORT) \
 		$(N_NODE) node_modules/.bin/next dev --webpack --port $(UI_PORT) \
