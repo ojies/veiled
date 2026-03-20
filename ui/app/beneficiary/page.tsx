@@ -185,6 +185,21 @@ export default function BeneficiaryPage() {
     return data;
   }
 
+  async function createWallet() {
+    if (!walletName) return;
+    setWalletLoading(true);
+    try {
+      const w = await api("/api/wallet/create", { name: walletName, role: "beneficiary" });
+      setWalletAddress(w.address);
+      setWalletMnemonic(w.mnemonic || "");
+      setWalletCreated(true);
+      toast("Wallet created", "success");
+    } catch (e: any) {
+      toast(`Wallet: ${e.message}`, "error");
+    }
+    setWalletLoading(false);
+  }
+
   async function createCredential() {
     if (!name.trim()) return;
     // Re-check merchant status on demand
@@ -199,14 +214,9 @@ export default function BeneficiaryPage() {
       setPhi(data.phi);
       toast("Identity credential created", "success");
 
-      // Auto-create wallet
-      try {
-        const w = await api("/api/wallet/create", { name: walletName, role: "beneficiary" });
-        setWalletAddress(w.address);
-        setWalletMnemonic(w.mnemonic || "");
-        setWalletCreated(true);
-      } catch (e: any) {
-        toast(`Wallet: ${e.message}`, "error");
+      // Auto-create wallet if not already created
+      if (!walletCreated) {
+        await createWallet();
       }
     } catch (e: any) {
       toast(e.message, "error");
@@ -382,7 +392,23 @@ export default function BeneficiaryPage() {
         )}
       </PhaseCard>
 
-      {/* Wallet */}
+      {/* Wallet — create independently of credential/merchant status */}
+      {name.trim() && !walletCreated && (
+        <div style={{
+          background: "#0a0a0a",
+          border: "1px solid #222",
+          borderRadius: "0.75rem",
+          padding: "1rem 1.25rem",
+          marginBottom: "1rem",
+        }}>
+          <p style={{ color: "#888", fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+            Create a wallet to receive and send funds. This can be done at any time.
+          </p>
+          <button className="btn" onClick={createWallet} disabled={walletLoading}>
+            {walletLoading ? "Creating..." : "Create Wallet"}
+          </button>
+        </div>
+      )}
       {walletCreated && (
         <WalletCard
           name={`${name}'s Wallet`}

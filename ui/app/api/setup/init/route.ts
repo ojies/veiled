@@ -66,13 +66,20 @@ export async function POST() {
 
     setMerchants(merchants);
 
-    // Create anonymity set with all registered merchants
-    await grpcCall(registry, "CreateSet", {
-      set_id: state.set_id,
-      merchant_names: merchants.map((m: any) => m.name),
-      beneficiary_capacity: BENEFICIARY_CAPACITY,
-      sats_per_user: fees.beneficiary,
-    });
+    // Create anonymity set with all registered merchants (idempotent — ignore "already exists")
+    try {
+      await grpcCall(registry, "CreateSet", {
+        set_id: state.set_id,
+        merchant_names: merchants.map((m: any) => m.name),
+        beneficiary_capacity: BENEFICIARY_CAPACITY,
+        sats_per_user: fees.beneficiary,
+      });
+    } catch (e: any) {
+      // If the set already exists (e.g., server restarted), proceed to fetch CRS
+      if (!e.message?.includes("already exists") && !e.message?.includes("ALREADY_EXISTS")) {
+        throw e;
+      }
+    }
 
     // Fetch CRS
     const crsResp: any = await grpcCall(registry, "GetCrs", {

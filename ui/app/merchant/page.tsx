@@ -132,6 +132,16 @@ export default function MerchantPage() {
     }
   }, [walletCreated, refreshBalance]);
 
+  // Allowed origin schemes — first entry is the default prepended when none is provided
+  const ALLOWED_SCHEMES = ["https://", "http://"];
+
+  function normalizeOrigin(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) return trimmed;
+    const hasScheme = ALLOWED_SCHEMES.some((s) => trimmed.toLowerCase().startsWith(s));
+    return hasScheme ? trimmed : ALLOWED_SCHEMES[0] + trimmed;
+  }
+
   // Register merchant (spawn gRPC server)
   async function registerMerchant() {
     if (!merchantName.trim() || !merchantOrigin.trim()) return;
@@ -143,13 +153,14 @@ export default function MerchantPage() {
       return;
     }
     setRegLoading(true);
+    const origin = normalizeOrigin(merchantOrigin);
     try {
       const res = await fetch("/api/merchant/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: merchantName.trim(),
-          origin: merchantOrigin.trim(),
+          origin,
         }),
       });
       const data = await res.json();
