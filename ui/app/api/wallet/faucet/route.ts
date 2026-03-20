@@ -2,6 +2,7 @@
 
 import { NextResponse } from "next/server";
 import { faucet, getBalance, createWallet } from "@/lib/wallet";
+import { MIN_FAUCET_SATS } from "@/lib/config";
 
 export async function POST(request: Request) {
   try {
@@ -32,11 +33,17 @@ export async function POST(request: Request) {
     // Mine 100 blocks to mature all coinbases
     faucet(miner.address, 100);
 
-    // Fetch updated balances
+    // Fetch updated balances; if below minimum, mine more until threshold is met
     for (const name of names) {
       if (results[name]?.funded) {
         try {
-          const bal = getBalance(name);
+          let bal = getBalance(name);
+          while (bal.total < MIN_FAUCET_SATS) {
+            const wallet = createWallet(name);
+            faucet(wallet.address, 1);
+            faucet(miner.address, 100); // mature the new coinbase
+            bal = getBalance(name);
+          }
           results[name].balance = bal;
         } catch {
           // ignore

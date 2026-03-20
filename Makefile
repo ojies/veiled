@@ -56,9 +56,9 @@ MERCHANT_START_PORT  := 50061
 # ── Merchant seeding config ──
 # REGISTRY_SERVER must match the merchant binary's --registry-server default
 REGISTRY_SERVER  := http://$(REGISTRY_LISTEN)
-# Must match registry --merchant-fee (default 3000); override if registry was
+# Must match registry --merchant-fee (default 500); override if registry was
 # started with a custom MERCHANT_REGISTRATION_FEE.
-MERCHANT_FEE     := 3000
+MERCHANT_FEE     := 500
 # Set ID the merchants will subscribe to; 0 = first set (before any set exists)
 MERCHANT_SET_ID  := 0
 

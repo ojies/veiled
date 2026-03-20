@@ -127,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             set_id: 1,
             merchant_names: merchant_names.clone(),
             beneficiary_capacity: BENEFICIARY_NAMES.len() as u32,
-            sats_per_user: 2_000,
+            sats_per_user: 200,
         })
         .await?;
     step(&format!(

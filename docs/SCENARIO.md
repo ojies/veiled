@@ -34,10 +34,10 @@ veiled-registry-grpc --listen [::1]:50051
 
 # Query registry address for payment (no set needed yet)
 GetRegistryAddress { set_id: 0 } → { address: "bcrt1p...", internal_key: <32 bytes> }
-GetFees() → { beneficiary_fee: 2000, merchant_fee: 3000 }
+GetFees() → { beneficiary_fee: 200, merchant_fee: 500 }
 
-# Pay merchant registration fee (3,000 sats each), then register with payment proof
-<pay 3,000 sats to registry address for CoffeeCo>
+# Pay merchant registration fee (500 sats each), then register with payment proof
+<pay 500 sats to registry address for CoffeeCo>
 RegisterMerchant {
     name: "CoffeeCo", origin: "https://coffeeco.com",
     funding_txid: <32 bytes>, funding_vout: 0
@@ -120,7 +120,7 @@ plus the public CRS.
 Alice first queries the registry for its payment address and fee:
 
 ```
-GetFees() → { beneficiary_fee: 2000, merchant_fee: 3000 }
+GetFees() → { beneficiary_fee: 200, merchant_fee: 500 }
 GetRegistryAddress { set_id: 1 } → { address: "bcrt1p...", internal_key: <32 bytes> }
 ```
 

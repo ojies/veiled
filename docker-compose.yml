@@ -55,8 +55,8 @@ services:
       - BITCOIN_RPC_URL=http://bitcoind:18443
       - BITCOIN_RPC_USER=veiled
       - BITCOIN_RPC_PASS=veiled
-      - BENEFICIARY_REGISTRATION_FEE=2000
-      - MERCHANT_REGISTRATION_FEE=3000
+      - BENEFICIARY_REGISTRATION_FEE=200
+      - MERCHANT_REGISTRATION_FEE=500
       - WALLETS_DIR=/app/data/wallets
       - REGISTRY_DB_PATH=/app/data/registry.db
       - LISTEN=0.0.0.0:50051
