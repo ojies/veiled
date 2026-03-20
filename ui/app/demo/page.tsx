@@ -1,52 +1,79 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import FaucetButton from "@/components/FaucetButton";
+import { useState } from "react";
 import { useToast } from "@/components/ToastProvider";
 import { clearAllLocalState } from "@/lib/useLocalState";
 
-export default function DemoPage() {
+function FundByAddress() {
   const { toast } = useToast();
-  const [walletNames, setWalletNames] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [seedLoading, setSeedLoading] = useState(false);
+  const [address, setAddress] = useState("");
+  const [funding, setFunding] = useState(false);
 
-  // Fetch current state to find all known wallets
-  useEffect(() => {
-    const fetchState = async () => {
-      try {
-        const res = await fetch("/api/state");
-        const data = await res.json();
-        const names: string[] = [];
-        if (data.wallets) {
-          names.push(...Object.keys(data.wallets));
-        }
-        // Always include registry
-        if (!names.includes("registry")) names.push("registry");
-        setWalletNames(names);
-      } catch {
-        setWalletNames(["registry"]);
-      }
-    };
-    fetchState();
-  }, []);
-
-  async function handleSeedMerchant() {
-    setSeedLoading(true);
+  async function handleFund() {
+    if (!address.trim()) return;
+    setFunding(true);
     try {
-      const res = await fetch("/api/setup/seed-merchants", { method: "POST" });
+      const res = await fetch("/api/wallet/faucet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: address.trim() }),
+      });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      if (data.existing) {
-        toast("Seed merchant already exists", "info");
-      } else {
-        toast(`Seed merchant created on port ${data.port}`, "success");
-      }
+      toast(`Funded ${address.trim().slice(0, 12)}... with ${data.blocks_mined} block(s)`, "success");
+      setAddress("");
     } catch (e: any) {
-      toast(e.message || "Seed merchant creation failed", "error");
+      toast(e.message || "Funding failed", "error");
     }
-    setSeedLoading(false);
+    setFunding(false);
   }
+
+  return (
+    <div
+      className="card"
+      style={{ marginBottom: "1.5rem" }}
+    >
+      <h3 style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
+        Fund
+      </h3>
+      <p style={{ color: "#888", fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+        Paste any regtest address to send it coinbase rewards.
+      </p>
+      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+        <input
+          type="text"
+          placeholder="bcrt1p..."
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleFund()}
+          style={{
+            flex: 1,
+            minWidth: "200px",
+            background: "#111",
+            border: "1px solid #333",
+            borderRadius: "0.5rem",
+            padding: "0.5rem 0.75rem",
+            color: "#fff",
+            fontFamily: "var(--font-geist-mono)",
+            fontSize: "0.85rem",
+          }}
+        />
+        <button
+          className="btn"
+          onClick={handleFund}
+          disabled={funding || !address.trim()}
+          style={{ flexShrink: 0 }}
+        >
+          {funding ? "Mining..." : "Fund"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function DemoPage() {
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(false);
 
   async function handleReset() {
     setLoading(true);
@@ -54,7 +81,6 @@ export default function DemoPage() {
       await fetch("/api/reset", { method: "POST" });
       clearAllLocalState();
       toast("Demo state reset — all wallets and processes cleared", "success");
-      setWalletNames(["registry"]);
     } catch {
       toast("Reset failed", "error");
     }
@@ -73,77 +99,11 @@ export default function DemoPage() {
         Demo Controls
       </h1>
       <p style={{ color: "#666", marginBottom: "2rem" }}>
-        Manage your demo environment &mdash; seed merchants, fund wallets, or reset state.
+        Manage your demo environment &mdash; fund wallets or reset state.
       </p>
 
-      {/* Seed Merchant Faucet */}
-      <div
-        className="card"
-        style={{
-          marginBottom: "1.5rem",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "1rem",
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <h3 style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
-            Seed Merchant
-          </h3>
-          <p style={{ color: "#888", fontSize: "0.85rem" }}>
-            Auto-create a funded, registered merchant so the beneficiary flow
-            can proceed without manual setup.
-          </p>
-        </div>
-        <button
-          className="btn"
-          onClick={handleSeedMerchant}
-          disabled={seedLoading}
-          style={{ flexShrink: 0 }}
-        >
-          {seedLoading ? "Creating..." : "Create Seed Merchant"}
-        </button>
-      </div>
-
-      {/* Fund All Wallets */}
-      <div
-        className="card"
-        style={{
-          marginBottom: "1.5rem",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "1rem",
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <h3 style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
-            Fund All Wallets
-          </h3>
-          <p style={{ color: "#888", fontSize: "0.85rem" }}>
-            Mine regtest blocks to fund {walletNames.length} wallet(s) via
-            coinbase rewards.
-          </p>
-          {walletNames.length > 0 && (
-            <p
-              style={{
-                color: "#555",
-                fontSize: "0.75rem",
-                marginTop: "0.25rem",
-              }}
-            >
-              {walletNames.join(", ")}
-            </p>
-          )}
-        </div>
-        <FaucetButton
-          walletNames={walletNames}
-          onComplete={() => toast("All wallets funded", "success")}
-        />
-      </div>
+      {/* Fund by Address */}
+      <FundByAddress />
 
       {/* Reset */}
       <div

@@ -225,18 +225,6 @@ export default function BeneficiaryPage() {
     setLoading("");
   }
 
-  async function fundWallet() {
-    if (!walletName) return;
-    setWalletLoading(true);
-    try {
-      await api("/api/wallet/faucet", { names: [walletName] });
-      toast("Wallet funded via regtest mining", "success");
-      await refreshBalance();
-    } catch (e: any) {
-      toast(e.message, "error");
-    }
-    setWalletLoading(false);
-  }
 
   async function registerWithRegistry() {
     setLoading("register");
@@ -416,8 +404,6 @@ export default function BeneficiaryPage() {
           address={walletAddress}
           balance={walletBalance}
           mnemonic={walletMnemonic}
-          onFaucet={fundWallet}
-          loading={walletLoading}
         />
       )}
 

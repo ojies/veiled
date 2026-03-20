@@ -93,25 +93,6 @@ export default function MerchantPage() {
     setWalletLoading(false);
   }
 
-  // Fund wallet
-  async function fundWallet() {
-    setWalletLoading(true);
-    try {
-      const res = await fetch("/api/wallet/faucet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ names: [walletName] }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      toast("Wallet funded via regtest mining", "success");
-      await refreshBalance();
-    } catch (e: any) {
-      toast(e.message, "error");
-    }
-    setWalletLoading(false);
-  }
-
   // Refresh balance
   const refreshBalance = useCallback(async () => {
     if (!walletName) return;
@@ -300,8 +281,6 @@ export default function MerchantPage() {
           address={walletAddress}
           balance={walletBalance}
           mnemonic={walletMnemonic}
-          onFaucet={fundWallet}
-          loading={walletLoading}
         />
       )}
 
