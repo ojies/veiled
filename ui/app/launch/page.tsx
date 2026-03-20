@@ -67,11 +67,11 @@ export default function LaunchPage() {
           marginBottom: "0.5rem",
         }}
       >
-        Launch Demo
+        Quick Preview
       </h1>
       <p style={{ color: "#666", marginBottom: "2rem" }}>
-        Open merchant and beneficiary tabs to run the full demo. If your browser
-        blocks popups, click each link individually.
+        Open merchant and beneficiary tabs to preview the full workflow. If your
+        browser blocks popups, click each link individually.
       </p>
 
       {blocked && (
@@ -86,14 +86,14 @@ export default function LaunchPage() {
             fontSize: "0.85rem",
           }}
         >
-          Your browser blocked some popups. Allow popups for this site in your
-          browser settings and try again, or open each tab individually below.
+          Your browser blocked some popups. Allow popups for this site in
+          your browser settings and try again, or open each tab individually below.
         </div>
       )}
 
       <div style={{ display: "flex", gap: "1rem", marginBottom: "2rem", flexWrap: "wrap" }}>
         <button className="btn" onClick={handleOpenAll} style={{ fontSize: "1rem", padding: "0.65rem 2.5rem" }}>
-          Launch All ({minMerchants + beneficiaryCapacity})
+          Open All ({minMerchants + beneficiaryCapacity})
         </button>
         <button
           className="btn-outline"
