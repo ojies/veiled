@@ -150,9 +150,14 @@ export default function Home() {
       if (w) opened++;
     }
 
-    if (opened < total) {
+    if (opened === 0) {
       toast(
-        `Browser blocked ${total - opened} popup(s). Redirecting to launcher page...`,
+        "Popups blocked — click \"Allow\" in your browser's popup notification, then try again.",
+        "error"
+      );
+    } else if (opened < total) {
+      toast(
+        `Only ${opened}/${total} tabs opened. Allow popups for this site and try again, or use the launcher page.`,
         "error"
       );
       router.push("/launch");

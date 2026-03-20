@@ -24,6 +24,8 @@ export default function LaunchPage() {
   const minMerchants = config?.minMerchants ?? 2;
   const beneficiaryCapacity = config?.beneficiaryCapacity ?? 4;
 
+  const [blocked, setBlocked] = useState(false);
+
   function handleOpenAll() {
     const total = minMerchants + beneficiaryCapacity;
     let opened = 0;
@@ -35,12 +37,20 @@ export default function LaunchPage() {
       const w = window.open(`/beneficiary?tab=${i + 1}`, "_blank");
       if (w) opened++;
     }
-    if (opened < total) {
+    if (opened === 0) {
+      setBlocked(true);
       toast(
-        `Opened ${opened}/${total} tabs. Your browser blocked some popups — click each link individually instead.`,
+        "Popups blocked — click \"Allow\" in your browser's popup notification, then try again.",
+        "error"
+      );
+    } else if (opened < total) {
+      setBlocked(true);
+      toast(
+        `Only ${opened}/${total} tabs opened. Allow popups for this site, then try again or click each link below.`,
         "error"
       );
     } else {
+      setBlocked(false);
       toast(`Opened ${total} tabs`, "success");
     }
   }
@@ -60,6 +70,23 @@ export default function LaunchPage() {
         Open merchant and beneficiary tabs to run the full demo. If your browser
         blocks popups, click each link individually.
       </p>
+
+      {blocked && (
+        <div
+          style={{
+            background: "rgba(245, 166, 35, 0.1)",
+            border: "1px solid rgba(245, 166, 35, 0.3)",
+            borderRadius: "8px",
+            padding: "0.75rem 1rem",
+            marginBottom: "1.5rem",
+            color: "#f5a623",
+            fontSize: "0.85rem",
+          }}
+        >
+          Your browser blocked some popups. Allow popups for this site in your
+          browser settings and try again, or open each tab individually below.
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: "1rem", marginBottom: "2rem", flexWrap: "wrap" }}>
         <button className="btn" onClick={handleOpenAll} style={{ fontSize: "1rem", padding: "0.65rem 2.5rem" }}>
