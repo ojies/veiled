@@ -2,7 +2,7 @@
 
 Interactive demo of the Veiled pseudonymous payment protocol on Bitcoin. Each participant (registry, merchants, beneficiaries) has a real Bitcoin wallet on regtest with live transactions.
 
-The landing page has a **Launch Demo** button that funds the registry wallet and opens `MIN_MERCHANTS` merchant tabs and `BENEFICIARY_CAPACITY` beneficiary tabs automatically. Each tab receives a `?tab=N` URL parameter that pre-fills a unique default name (e.g. "Merchant 1", "Beneficiary 2"). All per-tab state (wallet, credential, step progress) is stored in sessionStorage, so tabs are fully isolated from each other.
+The landing page has a **Launch Demo** button that navigates to the `/launch` page, which lists individual clickable links for each merchant and beneficiary tab. This avoids browser popup blockers that prevent `window.open()` from working outside localhost. Each tab receives a `?tab=N` URL parameter that pre-fills a unique default name (e.g. "Merchant 1", "Beneficiary 2"). All per-tab state (wallet, credential, step progress) is stored in sessionStorage, so tabs are fully isolated from each other.
 
 The **Demo Controls** page (`/demo`) provides utilities for the demo environment: a seed merchant faucet (auto-create a funded registered merchant), fund all wallets, and reset.
 

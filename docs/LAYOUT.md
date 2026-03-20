@@ -62,6 +62,7 @@ veiled/
 ├── ui/                                 # Web UI (Next.js, React + TypeScript)
 │   ├── app/
 │   │   ├── page.tsx                   # Landing page — role selector + protocol overview
+│   │   ├── launch/page.tsx           # Demo launcher — individual links for each merchant/beneficiary tab
 │   │   ├── demo/page.tsx             # Demo controls — seed merchants, fund wallets, reset
 │   │   ├── beneficiary/page.tsx      # Beneficiary flow (credential → register → receive payment)
 │   │   ├── merchant/page.tsx         # Merchant dashboard (registrations + send payments)

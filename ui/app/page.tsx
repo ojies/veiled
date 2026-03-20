@@ -126,7 +126,6 @@ const PROTOCOL_STEPS = [
 export default function Home() {
   const router = useRouter();
   const { toast } = useToast();
-  const [launching, setLaunching] = useState(false);
   const [config, setConfig] = useState<{ minMerchants: number; beneficiaryCapacity: number } | null>(null);
 
   useEffect(() => {
@@ -141,28 +140,25 @@ export default function Home() {
     const beneficiaryCapacity = config?.beneficiaryCapacity ?? 4;
     const total = minMerchants + beneficiaryCapacity;
 
-    setLaunching(true);
-    toast(`Opening ${total} tabs (${minMerchants} merchant + ${beneficiaryCapacity} beneficiary)...`, "info");
-
-    // Open all tabs synchronously within the click handler so the browser
-    // does not treat them as blocked popups (must be in the user-gesture
-    // call stack, before any await).
+    let opened = 0;
     for (let i = 0; i < minMerchants; i++) {
-      window.open(`/merchant?tab=${i + 1}`, "_blank");
+      const w = window.open(`/merchant?tab=${i + 1}`, "_blank");
+      if (w) opened++;
     }
     for (let i = 0; i < beneficiaryCapacity; i++) {
-      window.open(`/beneficiary?tab=${i + 1}`, "_blank");
+      const w = window.open(`/beneficiary?tab=${i + 1}`, "_blank");
+      if (w) opened++;
     }
 
-    // Fund registry wallet in the background (non-blocking).
-    fetch("/api/wallet/faucet", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ names: ["registry"] }),
-    })
-      .then(() => toast(`Launched ${total} tabs`, "success"))
-      .catch((e: any) => toast(e.message || "Faucet failed", "error"))
-      .finally(() => setLaunching(false));
+    if (opened < total) {
+      toast(
+        `Browser blocked ${total - opened} popup(s). Redirecting to launcher page...`,
+        "error"
+      );
+      router.push("/launch");
+    } else {
+      toast(`Opened ${total} tabs`, "success");
+    }
   }
 
   return (
@@ -264,10 +260,9 @@ export default function Home() {
           <button
             className="btn"
             onClick={handleLaunchDemo}
-            disabled={launching}
             style={{ fontSize: "1rem", padding: "0.65rem 2.5rem" }}
           >
-            {launching ? "Launching..." : "Launch Demo"}
+            Launch Demo
           </button>
           <button
             className="btn-outline"

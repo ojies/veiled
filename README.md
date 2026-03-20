@@ -122,9 +122,10 @@ Services:
 
 A chain-init container automatically creates a miner wallet, mines initial
 blocks, and funds the registry. Open [localhost:3000](http://localhost:3000)
-and click **Launch Demo** to automatically open `MIN_MERCHANTS` merchant tabs
-and `BENEFICIARY_CAPACITY` beneficiary tabs. Use the
-[Demo Controls](/demo) page to seed merchants, fund wallets, or reset state.
+and click **Launch Demo** to open the launcher page with individual links
+for `MIN_MERCHANTS` merchant tabs and `BENEFICIARY_CAPACITY` beneficiary
+tabs. Use the [Demo Controls](/demo) page to seed merchants, fund wallets,
+or reset state.
 
 Works with Docker or Podman (images use `docker.io/` prefix).
 
