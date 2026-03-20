@@ -95,14 +95,21 @@ full specification:
 
 ---
 
-## Quick start (Docker Compose)
+## Quick start
+
+### Option A: Docker Compose
 
 The easiest way to run the full stack — bitcoind, block explorer, registry,
 and web UI — all in containers:
 
 ```bash
-docker compose up --build
+make docker-up        # start all services
+make docker-logs      # follow logs
+make docker-down      # stop
+make docker-clean     # stop + remove volumes
 ```
+
+Or directly: `docker compose up --build`
 
 Services:
 
@@ -121,10 +128,61 @@ and `BENEFICIARY_CAPACITY` beneficiary tabs. Use the
 
 Works with Docker or Podman (images use `docker.io/` prefix).
 
-### Running natively
+### Option B: Native (via Makefile)
+
+Requires **Rust 1.87+**, **Node.js 20+**, and **Bitcoin Core** (`bitcoind` +
+`bitcoin-cli`) in PATH.
+
+```bash
+# 1. One-time setup — install Node deps + build Rust binaries
+make setup
+
+# 2. Start all services (bitcoind, registry, web UI)
+make dev
+
+# 3. Register merchants (run after make dev)
+make seed-merchants
+
+# 4. Open the UI
+open http://localhost:3000
+```
+
+`make dev` starts bitcoind (regtest), the registry gRPC server, initialises
+the chain (mines blocks, funds the registry wallet), and launches the Next.js
+UI. After that, `make seed-merchants` creates wallets for each merchant, pays
+the registration fee on-chain, and spawns merchant gRPC processes.
+
+#### Makefile targets
+
+| Target | Description |
+|--------|-------------|
+| `make setup` | One-time: check Node.js, install UI deps, build Rust release binaries |
+| `make dev` | Start bitcoind + registry + chain init + UI |
+| `make seed-merchants` | Register and start `MIN_MERCHANTS` merchant processes |
+| `make stop` | Stop all background services (merchants, UI, registry, bitcoind) |
+| `make clean` | Stop + remove all data (wallets, DB, regtest chain, `.next`) |
+| `make build-rust` | Rebuild Rust binaries only |
+| `make build-ui` | Reinstall UI npm dependencies |
+| `make logs` | Tail last 20 lines of each service log |
+| `make status` | Show running/stopped state of each service |
+
+#### Configuration variables
+
+Override at the command line: `make dev MIN_MERCHANTS=3 MATURITY_BLOCKS=20`
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MIN_MERCHANTS` | `2` | Number of merchants to seed |
+| `BENEFICIARY_CAPACITY` | `4` | Slots per anonymity set (power of 2) |
+| `MATURITY_BLOCKS` | `10` | Blocks mined to mature coinbase outputs |
+| `MERCHANT_START_PORT` | `50061` | Starting port for merchant gRPC servers |
+| `MERCHANT_FEE` | `3000` | Registration fee per merchant (sats) |
+| `UI_PORT` | `3000` | Web UI port |
+
+### Running individual binaries
 
 <details>
-<summary>Without Docker — requires Rust, Node.js, and bitcoind in PATH</summary>
+<summary>Without the Makefile — manual binary invocation</summary>
 
 #### Start the registry
 
@@ -166,13 +224,6 @@ Self-contained simulation with 3 merchants and 8 beneficiaries:
 
 ```bash
 cargo run --bin simulation --release
-```
-
-#### Run the web UI
-
-```bash
-./scripts/dev.sh
-# Open http://localhost:3000
 ```
 
 </details>

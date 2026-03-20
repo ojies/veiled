@@ -8,24 +8,31 @@ The **Demo Controls** page (`/demo`) provides utilities for the demo environment
 
 ## Prerequisites
 
-- **Rust** (cargo)
-- **Node.js** 18+ and npm
+- **Rust 1.87+** (cargo)
+- **Node.js 20+** and npm
 - **Bitcoin Core** (`bitcoind` and `bitcoin-cli` in PATH)
 
 ## Quick Start
 
-From the project root:
+From the project root, using the Makefile:
 
 ```bash
-./scripts/dev.sh
+make setup            # one-time: install deps + build Rust binaries
+make dev              # start bitcoind + registry + chain init + UI
+make seed-merchants   # register and start merchant processes
 ```
 
 This starts:
 1. `bitcoind` in regtest mode (port 18443)
 2. Registry gRPC server (port 50051)
 3. Web UI (port 3000)
+4. Merchant gRPC servers (ports 50061+)
 
-Merchants are created dynamically through the UI — no pre-started merchants.
+Open [localhost:3000](http://localhost:3000) and click **Launch Demo** to open
+merchant and beneficiary tabs automatically.
+
+Other useful targets: `make stop`, `make logs`, `make status`, `make clean`.
+See the project root [README](../README.md) for the full target list.
 
 ## Architecture
 
@@ -98,7 +105,9 @@ The UI runs as a standalone container in Docker Compose. From the
 project root:
 
 ```bash
-docker compose up --build
+make docker-up        # or: docker compose up --build -d
+make docker-logs      # follow logs
+make docker-down      # stop
 ```
 
 The UI container bundles all Rust binaries (`veiled-core`, `veiled-wallet`,
@@ -106,6 +115,11 @@ The UI container bundles all Rust binaries (`veiled-core`, `veiled-wallet`,
 environment variables — see `docker-compose.yml` for the full list.
 
 ## Local Development
+
+The recommended way is `make dev` from the project root, which sets all
+environment variables and starts dependencies automatically.
+
+To run the UI standalone (registry and bitcoind must already be running):
 
 ```bash
 cd ui

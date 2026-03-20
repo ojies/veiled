@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useToast } from "@/components/ToastProvider";
 
 function Particles({ count }: { count: number }) {
@@ -127,28 +127,42 @@ export default function Home() {
   const router = useRouter();
   const { toast } = useToast();
   const [launching, setLaunching] = useState(false);
+  const [config, setConfig] = useState<{ minMerchants: number; beneficiaryCapacity: number } | null>(null);
 
-  async function handleLaunchDemo() {
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then(setConfig)
+      .catch(() => {});
+  }, []);
+
+  function handleLaunchDemo() {
+    const minMerchants = config?.minMerchants ?? 2;
+    const beneficiaryCapacity = config?.beneficiaryCapacity ?? 4;
+    const total = minMerchants + beneficiaryCapacity;
+
     setLaunching(true);
-    try {
-      toast("Setting up demo...", "info");
-      await fetch("/api/wallet/faucet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ names: ["registry"] }),
-      });
-      const { minMerchants, beneficiaryCapacity } = await fetch("/api/config").then((r) => r.json());
-      for (let i = 0; i < minMerchants; i++) {
-        window.open(`/merchant?tab=${i + 1}`, "_blank");
-      }
-      for (let i = 0; i < beneficiaryCapacity; i++) {
-        window.open(`/beneficiary?tab=${i + 1}`, "_blank");
-      }
-      toast(`Opened ${minMerchants} merchant + ${beneficiaryCapacity} beneficiary tabs`, "success");
-    } catch (e: any) {
-      toast(e.message || "Launch failed", "error");
+    toast(`Opening ${total} tabs (${minMerchants} merchant + ${beneficiaryCapacity} beneficiary)...`, "info");
+
+    // Open all tabs synchronously within the click handler so the browser
+    // does not treat them as blocked popups (must be in the user-gesture
+    // call stack, before any await).
+    for (let i = 0; i < minMerchants; i++) {
+      window.open(`/merchant?tab=${i + 1}`, "_blank");
     }
-    setLaunching(false);
+    for (let i = 0; i < beneficiaryCapacity; i++) {
+      window.open(`/beneficiary?tab=${i + 1}`, "_blank");
+    }
+
+    // Fund registry wallet in the background (non-blocking).
+    fetch("/api/wallet/faucet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ names: ["registry"] }),
+    })
+      .then(() => toast(`Launched ${total} tabs`, "success"))
+      .catch((e: any) => toast(e.message || "Faucet failed", "error"))
+      .finally(() => setLaunching(false));
   }
 
   return (
