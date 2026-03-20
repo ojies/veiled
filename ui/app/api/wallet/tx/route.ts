@@ -12,7 +12,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "txid required" }, { status: 400 });
     }
 
-    const result = getTx(txid);
+    const result = await getTx(txid);
     return NextResponse.json(result);
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

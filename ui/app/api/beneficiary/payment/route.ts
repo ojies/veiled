@@ -2,7 +2,7 @@
 
 import { NextResponse } from "next/server";
 import { getMerchantClient, grpcCall } from "@/lib/grpc";
-import { createPaymentRequest } from "@/lib/helper";
+import { createPaymentRequest } from "@/lib/core";
 import { getState, getBeneficiary, updateBeneficiary, setPhase } from "@/lib/state";
 
 function getMerchantAddr(name: string): string | null {
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     const gHex = crsBytes.subarray(12, 12 + 33).toString("hex");
 
     // Generate Schnorr proof via helper
-    const proofResult = createPaymentRequest({
+    const proofResult = await createPaymentRequest({
       credentialRHex: ben.credential.r,
       merchantName: merchant,
       crsGHex: gHex,

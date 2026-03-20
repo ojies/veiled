@@ -1,9 +1,9 @@
 // TypeScript wrapper for the veiled-wallet Rust binary.
-// Calls the binary via stdin/stdout JSON, same pattern as veiled-core.
+// Uses a persistent daemon process for fast IPC.
 
-import { execFileSync } from "child_process";
 import path from "path";
 import fs from "fs";
+import { ProcessPool } from "./process-pool";
 
 const WALLET_BIN =
   process.env.WALLET_BIN ||
@@ -20,29 +20,10 @@ const RPC_URL = process.env.BITCOIN_RPC_URL || "http://localhost:18443";
 const RPC_USER = process.env.BITCOIN_RPC_USER || "veiled";
 const RPC_PASS = process.env.BITCOIN_RPC_PASS || "veiled";
 
-function callWallet(command: string, params: Record<string, unknown> = {}) {
-  const input = JSON.stringify({ command, ...params });
-  try {
-    const result = execFileSync(WALLET_BIN, {
-      input,
-      encoding: "utf8",
-      timeout: 30000,
-    });
-    return JSON.parse(result);
-  } catch (err: any) {
-    // execFileSync throws on non-zero exit; extract the actual error
-    const stdout = err.stdout?.toString?.() || "";
-    const stderr = err.stderr?.toString?.() || "";
-    try {
-      const parsed = JSON.parse(stdout);
-      if (parsed.error) throw new Error(parsed.error);
-    } catch (parseErr) {
-      if (parseErr instanceof Error && parseErr.message !== stdout) throw parseErr;
-    }
-    throw new Error(
-      stderr || stdout || `wallet command '${command}' failed (exit ${err.status})`
-    );
-  }
+const pool = new ProcessPool(WALLET_BIN);
+
+async function callWallet(command: string, params: Record<string, unknown> = {}): Promise<any> {
+  return pool.call({ command, ...params });
 }
 
 function statePath(name: string): string {
@@ -53,7 +34,7 @@ export function walletExists(name: string): boolean {
   return fs.existsSync(statePath(name));
 }
 
-export function createWallet(name: string) {
+export async function createWallet(name: string) {
   return callWallet("create-wallet", {
     state_path: statePath(name),
     name,
@@ -63,7 +44,7 @@ export function createWallet(name: string) {
   });
 }
 
-export function getBalance(name: string) {
+export async function getBalance(name: string) {
   return callWallet("get-balance", {
     state_path: statePath(name),
     rpc_url: RPC_URL,
@@ -72,7 +53,7 @@ export function getBalance(name: string) {
   });
 }
 
-export function getAddress(name: string) {
+export async function getAddress(name: string) {
   return callWallet("get-address", {
     state_path: statePath(name),
     rpc_url: RPC_URL,
@@ -81,7 +62,7 @@ export function getAddress(name: string) {
   });
 }
 
-export function send(fromName: string, toAddress: string, amountSats: number) {
+export async function send(fromName: string, toAddress: string, amountSats: number) {
   return callWallet("send", {
     state_path: statePath(fromName),
     to_address: toAddress,
@@ -92,7 +73,7 @@ export function send(fromName: string, toAddress: string, amountSats: number) {
   });
 }
 
-export function faucet(address: string, blocks?: number) {
+export async function faucet(address: string, blocks?: number) {
   return callWallet("faucet", {
     address,
     blocks: blocks || 1,
@@ -102,7 +83,7 @@ export function faucet(address: string, blocks?: number) {
   });
 }
 
-export function getTx(txid: string) {
+export async function getTx(txid: string) {
   return callWallet("get-tx", {
     txid,
     rpc_url: RPC_URL,
@@ -111,7 +92,7 @@ export function getTx(txid: string) {
   });
 }
 
-export function getTxHistory(name: string) {
+export async function getTxHistory(name: string) {
   return callWallet("get-tx-history", {
     state_path: statePath(name),
     rpc_url: RPC_URL,

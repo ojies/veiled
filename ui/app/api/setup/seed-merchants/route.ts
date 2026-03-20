@@ -50,19 +50,19 @@ export async function POST() {
 
     // Create and fund wallet
     const walletName = `merchant-${SEED_NAME.toLowerCase()}`;
-    const wallet = createWallet(walletName);
+    const wallet = await createWallet(walletName);
 
-    faucet(wallet.address, 1);
-    const dummyWallet = createWallet("faucet-miner");
-    faucet(dummyWallet.address, MATURITY_BLOCKS);
+    await faucet(wallet.address, 1);
+    const dummyWallet = await createWallet("faucet-miner");
+    await faucet(dummyWallet.address, MATURITY_BLOCKS);
 
     // Pay merchant registration fee
-    const sendResult = send(walletName, registryAddress, merchantFee);
+    const sendResult = await send(walletName, registryAddress, merchantFee);
     const fundingTxid = sendResult.txid;
-    faucet(dummyWallet.address, 1);
+    await faucet(dummyWallet.address, 1);
 
     // Find correct vout
-    const txInfo = getTx(fundingTxid);
+    const txInfo = await getTx(fundingTxid);
     let fundingVout = -1;
     if (txInfo.vout) {
       for (let i = 0; i < txInfo.vout.length; i++) {

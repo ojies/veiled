@@ -1,7 +1,7 @@
 // POST /api/beneficiary/credential — Phase 1: create credential locally
 
 import { NextResponse } from "next/server";
-import { createCredential } from "@/lib/helper";
+import { createCredential } from "@/lib/core";
 import { getState, addBeneficiary, setPhase } from "@/lib/state";
 
 export async function POST(request: Request) {
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = createCredential(state.crs_hex, name);
+    const result = await createCredential(state.crs_hex, name);
     addBeneficiary(name, result.credential);
     setPhase(1);
 

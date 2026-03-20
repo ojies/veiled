@@ -16,14 +16,14 @@ export async function POST(request: Request) {
     }
 
     // Ensure a miner wallet exists for maturing coinbases
-    const miner = createWallet("faucet-miner");
+    const miner = await createWallet("faucet-miner");
     const results: Record<string, any> = {};
 
     for (const name of names) {
       try {
-        const wallet = createWallet(name); // idempotent
+        const wallet = await createWallet(name); // idempotent
         // Mine 1 block to this wallet's address
-        faucet(wallet.address, 1);
+        await faucet(wallet.address, 1);
         results[name] = { address: wallet.address, funded: true };
       } catch (e: any) {
         results[name] = { error: e.message };
@@ -31,22 +31,22 @@ export async function POST(request: Request) {
     }
 
     // Mine 101 blocks to mature all coinbases (coinbase needs 100 confirmations)
-    faucet(miner.address, 101);
+    await faucet(miner.address, 101);
 
     // Fetch updated balances; if below minimum, mine more until threshold is met
     for (const name of names) {
       if (results[name]?.funded) {
         try {
-          let bal = getBalance(name);
+          let bal = await getBalance(name);
           while (bal.confirmed < MIN_FAUCET_SATS) {
-            const wallet = createWallet(name);
-            faucet(wallet.address, 1);
-            faucet(miner.address, 101); // mature the new coinbase
-            bal = getBalance(name);
+            const wallet = await createWallet(name);
+            await faucet(wallet.address, 1);
+            await faucet(miner.address, 101); // mature the new coinbase
+            bal = await getBalance(name);
           }
           results[name].balance = bal;
-        } catch {
-          // ignore
+        } catch (e: any) {
+          console.error(`[faucet] balance check failed for ${name}:`, e.message);
         }
       }
     }

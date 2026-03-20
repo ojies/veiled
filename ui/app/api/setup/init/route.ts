@@ -22,7 +22,7 @@ export async function POST() {
     // Ensure registry wallet exists in state
     if (!state.registry_address) {
       if (walletExists("registry")) {
-        const w = createWallet("registry"); // idempotent
+        const w = await createWallet("registry"); // idempotent
         setRegistryAddress(w.address);
       }
     }

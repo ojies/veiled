@@ -15,7 +15,7 @@ export async function GET(request: Request) {
     // Wallet name for beneficiary
     const walletName = `beneficiary-${name.toLowerCase().replace(/\s+/g, "-")}`;
 
-    const history = getTxHistory(walletName);
+    const history = await getTxHistory(walletName);
 
     // Filter to incoming transactions only
     const incoming = (history.transactions || []).filter(

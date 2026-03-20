@@ -19,11 +19,11 @@
 use bdk_bitcoind_rpc::bitcoincore_rpc::{Auth, Client, RpcApi};
 use bdk_bitcoind_rpc::Emitter;
 use bdk_wallet::bitcoin::bip32::Xpriv;
-use bdk_wallet::bitcoin::{Address, Amount, FeeRate, Network};
-use bdk_wallet::chain::ChainPosition;
+use bdk_wallet::bitcoin::{Address, Amount, BlockHash, FeeRate, Network};
+use bdk_wallet::chain::{ChainPosition, BlockId};
 use bdk_wallet::template::{Bip86, DescriptorTemplate};
 #[allow(deprecated)]
-use bdk_wallet::{KeychainKind, SignOptions, Wallet};
+use bdk_wallet::{KeychainKind, SignOptions, Update, Wallet};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::Read;
@@ -114,6 +114,12 @@ struct WalletState {
     #[serde(default)]
     address_index: u32,
     network: String,
+    /// Last synced block height (for resuming sync without replaying from genesis)
+    #[serde(default)]
+    checkpoint_height: Option<u32>,
+    /// Block hash at checkpoint_height
+    #[serde(default)]
+    checkpoint_hash: Option<String>,
 }
 
 // ── Error response ──
@@ -154,6 +160,7 @@ fn save_state(path: &str, state: &WalletState) -> Result<(), String> {
 }
 
 /// Recreate a BDK wallet from stored mnemonic.
+/// If a checkpoint was saved, inserts it so sync resumes from there instead of genesis.
 fn recreate_wallet(state: &WalletState) -> Result<Wallet, String> {
     let mnemonic: bip39::Mnemonic = state
         .mnemonic
@@ -173,6 +180,18 @@ fn recreate_wallet(state: &WalletState) -> Result<Wallet, String> {
 
     // Advance address index to match stored state
     let _ = wallet.reveal_addresses_to(KeychainKind::External, state.address_index);
+
+    // Restore saved checkpoint so sync doesn't replay from genesis
+    if let (Some(height), Some(hash_hex)) = (state.checkpoint_height, state.checkpoint_hash.as_ref()) {
+        if let Ok(hash) = hash_hex.parse::<BlockHash>() {
+            let block_id = BlockId { height, hash };
+            let cp = wallet.latest_checkpoint().insert(block_id);
+            let _ = wallet.apply_update(Update {
+                chain: Some(cp),
+                ..Default::default()
+            });
+        }
+    }
 
     Ok(wallet)
 }
@@ -203,6 +222,15 @@ fn sync_wallet(wallet: &mut Wallet, rpc: &Client) -> Result<(), String> {
     wallet.apply_unconfirmed_txs(mempool.update);
 
     Ok(())
+}
+
+/// Save the wallet's latest checkpoint back to the state file for faster future syncs.
+fn save_checkpoint(state_path: &str, wallet: &Wallet) -> Result<(), String> {
+    let mut state = load_state(state_path)?;
+    let cp = wallet.latest_checkpoint();
+    state.checkpoint_height = Some(cp.height());
+    state.checkpoint_hash = Some(cp.hash().to_string());
+    save_state(state_path, &state)
 }
 
 // ── Handlers ──
@@ -262,6 +290,8 @@ fn handle_create_wallet(params: serde_json::Value) -> Result<serde_json::Value, 
         address: address.clone(),
         address_index: 0,
         network: "regtest".to_string(),
+        checkpoint_height: None,
+        checkpoint_hash: None,
     };
     save_state(&p.state_path, &state)?;
 
@@ -284,6 +314,7 @@ fn handle_get_balance(params: serde_json::Value) -> Result<serde_json::Value, St
 
     let mut wallet = recreate_wallet(&state)?;
     sync_wallet(&mut wallet, &rpc)?;
+    let _ = save_checkpoint(&p.state_path, &wallet);
 
     let balance = wallet.balance();
     let confirmed = balance.confirmed.to_sat();
@@ -325,6 +356,7 @@ fn handle_send(params: serde_json::Value) -> Result<serde_json::Value, String> {
 
     let mut wallet = recreate_wallet(&state)?;
     sync_wallet(&mut wallet, &rpc)?;
+    let _ = save_checkpoint(&p.state_path, &wallet);
 
     let to_addr = Address::from_str(&p.to_address)
         .map_err(|e| format!("invalid address: {e}"))?
@@ -414,6 +446,7 @@ fn handle_get_tx_history(params: serde_json::Value) -> Result<serde_json::Value,
 
     let mut wallet = recreate_wallet(&state)?;
     sync_wallet(&mut wallet, &rpc)?;
+    let _ = save_checkpoint(&p.state_path, &wallet);
 
     let transactions: Vec<serde_json::Value> = wallet
         .transactions()
@@ -449,26 +482,10 @@ fn handle_get_tx_history(params: serde_json::Value) -> Result<serde_json::Value,
     }))
 }
 
-// ── Main ──
+// ── Command dispatch ──
 
-fn main() {
-    let mut input = String::new();
-    std::io::stdin()
-        .read_to_string(&mut input)
-        .expect("failed to read stdin");
-
-    let cmd: Command = match serde_json::from_str(&input) {
-        Ok(c) => c,
-        Err(e) => {
-            let err = ErrorResponse {
-                error: format!("invalid JSON: {e}"),
-            };
-            println!("{}", serde_json::to_string(&err).unwrap());
-            std::process::exit(1);
-        }
-    };
-
-    let result = match cmd.command.as_str() {
+fn dispatch(cmd: Command) -> Result<serde_json::Value, String> {
+    match cmd.command.as_str() {
         "create-wallet" => handle_create_wallet(cmd.params),
         "get-balance" => handle_get_balance(cmd.params),
         "get-address" => handle_get_address(cmd.params),
@@ -476,17 +493,70 @@ fn main() {
         "faucet" => handle_faucet(cmd.params),
         "get-tx" => handle_get_tx(cmd.params),
         "get-tx-history" => handle_get_tx_history(cmd.params),
+        "ping" => Ok(json!({"status": "ok"})),
         other => Err(format!("unknown command: {other}")),
-    };
+    }
+}
 
-    match result {
-        Ok(val) => {
-            println!("{}", serde_json::to_string(&val).unwrap());
+// ── Main ──
+
+fn main() {
+    use std::io::BufRead;
+
+    // If --daemon flag is passed, run in persistent line-delimited JSON mode.
+    // Otherwise, fall back to single-command mode for backwards compatibility.
+    let daemon = std::env::args().any(|a| a == "--daemon");
+
+    if daemon {
+        let stdin = std::io::stdin();
+        let reader = stdin.lock();
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break, // stdin closed
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let output = match serde_json::from_str::<Command>(&line) {
+                Ok(cmd) => match dispatch(cmd) {
+                    Ok(val) => serde_json::to_string(&val).unwrap(),
+                    Err(e) => serde_json::to_string(&ErrorResponse { error: e }).unwrap(),
+                },
+                Err(e) => serde_json::to_string(&ErrorResponse {
+                    error: format!("invalid JSON: {e}"),
+                })
+                .unwrap(),
+            };
+            println!("{output}");
         }
-        Err(e) => {
-            let err = ErrorResponse { error: e };
-            println!("{}", serde_json::to_string(&err).unwrap());
-            std::process::exit(1);
+    } else {
+        // Single-command mode (backwards compatible)
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .expect("failed to read stdin");
+
+        let cmd: Command = match serde_json::from_str(&input) {
+            Ok(c) => c,
+            Err(e) => {
+                let err = ErrorResponse {
+                    error: format!("invalid JSON: {e}"),
+                };
+                println!("{}", serde_json::to_string(&err).unwrap());
+                std::process::exit(1);
+            }
+        };
+
+        match dispatch(cmd) {
+            Ok(val) => {
+                println!("{}", serde_json::to_string(&val).unwrap());
+            }
+            Err(e) => {
+                let err = ErrorResponse { error: e };
+                println!("{}", serde_json::to_string(&err).unwrap());
+                std::process::exit(1);
+            }
         }
     }
 }

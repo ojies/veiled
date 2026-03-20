@@ -37,15 +37,15 @@ export async function POST(request: Request) {
 
     // Step 2: Send payment from beneficiary's wallet to registry address
     const walletName = `beneficiary-${name.toLowerCase().replace(/\s+/g, "-")}`;
-    const sendResult = send(walletName, registryAddress, beneficiaryFee);
+    const sendResult = await send(walletName, registryAddress, beneficiaryFee);
     const fundingTxid = sendResult.txid;
 
     // Step 3: Mine a block to confirm (regtest only)
-    const miner = createWallet("faucet-miner");
-    faucet(miner.address, 1);
+    const miner = await createWallet("faucet-miner");
+    await faucet(miner.address, 1);
 
     // Step 4: Find the correct vout (the output paying the registry address)
-    const txInfo = getTx(fundingTxid);
+    const txInfo = await getTx(fundingTxid);
     let fundingVout = -1;
     if (txInfo.vout) {
       for (let i = 0; i < txInfo.vout.length; i++) {

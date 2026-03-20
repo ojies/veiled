@@ -15,8 +15,8 @@ export async function POST() {
     await grpcCall(registry, "FinalizeSet", { set_id: state.set_id });
 
     // Mine a block to confirm the broadcast commitment transaction
-    const confirmMiner = createWallet("faucet-miner");
-    faucet(confirmMiner.address, 1);
+    const confirmMiner = await createWallet("faucet-miner");
+    await faucet(confirmMiner.address, 1);
 
     // Fetch updated anonymity set
     const updatedSet: any = await grpcCall(registry, "GetAnonymitySet", {

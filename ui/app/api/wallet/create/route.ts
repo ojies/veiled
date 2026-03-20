@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     }
 
     // Create wallet (or load existing from state file — handled by Rust binary)
-    const result = createWallet(name);
+    const result = await createWallet(name);
 
     setWallet(name, {
       address: result.address,

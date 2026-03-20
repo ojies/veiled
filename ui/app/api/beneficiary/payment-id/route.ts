@@ -2,7 +2,7 @@
 
 import { NextResponse } from "next/server";
 import { getMerchantClient, grpcCall } from "@/lib/grpc";
-import { createPaymentId } from "@/lib/helper";
+import { createPaymentId } from "@/lib/core";
 import { getState, getBeneficiary, updateBeneficiary, setPhase } from "@/lib/state";
 
 function getMerchantAddr(name: string): string | null {
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
     const merchantIdx = rawIdx + 1;
 
     // Generate ZK proof via helper
-    const proofResult = createPaymentId({
+    const proofResult = await createPaymentId({
       credential: ben.credential,
       crsHex: state.crs_hex!,
       commitmentsHex: state.anonymity_set.commitments,

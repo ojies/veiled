@@ -12,7 +12,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "name required" }, { status: 400 });
     }
 
-    const result = getBalance(name);
+    const result = await getBalance(name);
     return NextResponse.json(result);
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

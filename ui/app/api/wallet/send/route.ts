@@ -14,7 +14,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = send(from, to_address, amount_sats);
+    const result = await send(from, to_address, amount_sats);
     return NextResponse.json(result);
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

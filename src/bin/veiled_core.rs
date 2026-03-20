@@ -240,39 +240,76 @@ fn handle_create_payment_request(params: serde_json::Value) -> Result<serde_json
     serde_json::to_value(resp).map_err(|e| e.to_string())
 }
 
-fn main() {
-    let mut input = String::new();
-    std::io::stdin()
-        .read_to_string(&mut input)
-        .expect("failed to read stdin");
+// ── Command dispatch ──
 
-    let cmd: Command = match serde_json::from_str(&input) {
-        Ok(c) => c,
-        Err(e) => {
-            let err = ErrorResponse {
-                error: format!("invalid JSON: {e}"),
-            };
-            println!("{}", serde_json::to_string(&err).unwrap());
-            std::process::exit(1);
-        }
-    };
-
-    let result = match cmd.command.as_str() {
+fn dispatch(cmd: Command) -> Result<serde_json::Value, String> {
+    match cmd.command.as_str() {
         "create-credential" => handle_create_credential(cmd.params),
         "register-locally" => handle_register_locally(cmd.params),
         "create-payment-id" => handle_create_payment_id(cmd.params),
         "create-payment-request" => handle_create_payment_request(cmd.params),
+        "ping" => Ok(serde_json::json!({"status": "ok"})),
         other => Err(format!("unknown command: {other}")),
-    };
+    }
+}
 
-    match result {
-        Ok(val) => {
-            println!("{}", serde_json::to_string(&val).unwrap());
+// ── Main ──
+
+fn main() {
+    use std::io::BufRead;
+
+    let daemon = std::env::args().any(|a| a == "--daemon");
+
+    if daemon {
+        let stdin = std::io::stdin();
+        let reader = stdin.lock();
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let output = match serde_json::from_str::<Command>(&line) {
+                Ok(cmd) => match dispatch(cmd) {
+                    Ok(val) => serde_json::to_string(&val).unwrap(),
+                    Err(e) => serde_json::to_string(&ErrorResponse { error: e }).unwrap(),
+                },
+                Err(e) => serde_json::to_string(&ErrorResponse {
+                    error: format!("invalid JSON: {e}"),
+                })
+                .unwrap(),
+            };
+            println!("{output}");
         }
-        Err(e) => {
-            let err = ErrorResponse { error: e };
-            println!("{}", serde_json::to_string(&err).unwrap());
-            std::process::exit(1);
+    } else {
+        // Single-command mode (backwards compatible)
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .expect("failed to read stdin");
+
+        let cmd: Command = match serde_json::from_str(&input) {
+            Ok(c) => c,
+            Err(e) => {
+                let err = ErrorResponse {
+                    error: format!("invalid JSON: {e}"),
+                };
+                println!("{}", serde_json::to_string(&err).unwrap());
+                std::process::exit(1);
+            }
+        };
+
+        match dispatch(cmd) {
+            Ok(val) => {
+                println!("{}", serde_json::to_string(&val).unwrap());
+            }
+            Err(e) => {
+                let err = ErrorResponse { error: e };
+                println!("{}", serde_json::to_string(&err).unwrap());
+                std::process::exit(1);
+            }
         }
     }
 }
