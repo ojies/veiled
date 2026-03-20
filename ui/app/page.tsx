@@ -140,27 +140,28 @@ export default function Home() {
     const beneficiaryCapacity = config?.beneficiaryCapacity ?? 4;
     const total = minMerchants + beneficiaryCapacity;
 
-    let opened = 0;
+    // Collect all window refs so we can close them if the browser blocks partway.
+    const wins: Window[] = [];
     for (let i = 0; i < minMerchants; i++) {
       const w = window.open(`/merchant?tab=${i + 1}`, "_blank");
-      if (w) opened++;
+      if (w) wins.push(w);
+      else break;
     }
-    for (let i = 0; i < beneficiaryCapacity; i++) {
-      const w = window.open(`/beneficiary?tab=${i + 1}`, "_blank");
-      if (w) opened++;
+    if (wins.length === minMerchants) {
+      for (let i = 0; i < beneficiaryCapacity; i++) {
+        const w = window.open(`/beneficiary?tab=${i + 1}`, "_blank");
+        if (w) wins.push(w);
+        else break;
+      }
     }
 
-    if (opened === 0) {
+    if (wins.length < total) {
+      // Browser blocked partway — close the orphan tabs.
+      wins.forEach((w) => w.close());
       toast(
         "Popups blocked — click \"Allow\" in your browser's popup notification, then try again.",
         "error"
       );
-    } else if (opened < total) {
-      toast(
-        `Only ${opened}/${total} tabs opened. Allow popups for this site and try again, or use the launcher page.`,
-        "error"
-      );
-      router.push("/launch");
     } else {
       toast(`Opened ${total} tabs`, "success");
     }
