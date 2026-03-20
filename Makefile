@@ -7,8 +7,8 @@
 #   make seed-merchants  # register MIN_MERCHANTS merchants (run after make dev)
 #   make stop            # stop all background services (incl. merchants)
 #   make clean           # stop + remove data (wallets, db, regtest chain)
-#   make build-rust      # rebuild Rust binaries only
-#   make build-ui        # rebuild UI deps only
+#   make registry        # build Rust + start registry locally (needs bitcoind)
+#   make ui              # install deps + start UI locally (needs registry)
 #   make logs            # tail last 20 lines of each service log
 #   make status          # show running/stopped state of each service
 #
@@ -17,6 +17,7 @@
 #   make docker-build    # build Docker Compose images
 #   make docker-logs     # follow Docker Compose logs
 #   make docker-clean    # stop Docker Compose and remove volumes
+#   make docker-infra    # start only bitcoind + explorer in Docker
 
 SHELL := /bin/bash
 
@@ -78,7 +79,8 @@ endif
 
 .PHONY: setup dev stop clean build-rust build-ui start-bitcoind start-registry \
         init-chain start-ui check-node seed-merchants logs status \
-        docker-up docker-down docker-build docker-logs docker-clean
+        docker-up docker-down docker-build docker-logs docker-clean docker-infra \
+        registry ui
 
 # ═══════════════════════════════════════════════════════════════
 # Setup (one-time)
@@ -375,6 +377,35 @@ docker-clean:
 	@echo "🐳 Stopping Docker Compose and removing volumes..."
 	docker compose down -v
 	@echo "✅ Docker services and volumes removed"
+
+docker-infra:
+	@echo "🐳 Starting bitcoind + explorer in Docker..."
+	docker compose up -d bitcoind explorer
+	@echo ""
+	@echo "  Bitcoin RPC: http://localhost:18443 (user: veiled, pass: veiled)"
+	@echo "  Explorer:    http://localhost:3002"
+	@echo ""
+	@echo "  Stop: docker compose down"
+
+# ═══════════════════════════════════════════════════════════════
+# Standalone: registry and UI (use with docker-infra)
+# ═══════════════════════════════════════════════════════════════
+
+registry: build-rust
+	@mkdir -p $(WALLETS) $(DATA_DIR) $(PIDS_DIR) $(LOG_DIR)
+	@$(MAKE) start-registry
+	@sleep 1
+	@$(MAKE) init-chain
+	@echo ""
+	@echo "  Registry: $(REGISTRY_LISTEN)"
+	@echo "  Stop:     make stop"
+
+ui: check-node build-ui
+	@mkdir -p $(PIDS_DIR) $(LOG_DIR)
+	@$(MAKE) start-ui
+	@echo ""
+	@echo "  UI: http://localhost:$(UI_PORT)"
+	@echo "  Stop: make stop"
 
 # ═══════════════════════════════════════════════════════════════
 # Shortcuts
