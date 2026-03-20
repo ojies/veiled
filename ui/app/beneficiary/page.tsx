@@ -49,18 +49,19 @@ export default function BeneficiaryPage() {
     return new URLSearchParams(window.location.search).get("tab");
   });
 
-  // Persisted state (per-tab via sessionStorage)
-  const [name, setName] = useSessionState("ben:name", tabIndex ? `Beneficiary ${tabIndex}` : "");
-  const [phi, setPhi] = useSessionState<string | null>("ben:phi", null);
-  const [regIndex, setRegIndex] = useSessionState<number | null>("ben:regIndex", null);
-  const [setStatus, setSetStatus] = useSessionState<{ count: number; capacity: number } | null>("ben:setStatus", null);
-  const [finalized, setFinalized] = useSessionState("ben:finalized", false);
-  const [registrations, setRegistrations] = useSessionState<Registration[]>("ben:registrations", []);
-  const [payments, setPayments] = useSessionState<Payment[]>("ben:payments", []);
-  const [walletAddress, setWalletAddress] = useSessionState("ben:walletAddr", "");
-  const [walletMnemonic, setWalletMnemonic] = useSessionState("ben:walletMnemonic", "");
-  const [walletCreated, setWalletCreated] = useSessionState("ben:walletCreated", false);
-  const [registryAddress, setRegistryAddress] = useSessionState("ben:registryAddr", "");
+  // Persisted state (per-tab via sessionStorage, keyed by tab index)
+  const tabKey = tabIndex ? `:${tabIndex}` : "";
+  const [name, setName] = useSessionState(`ben:name${tabKey}`, tabIndex ? `Beneficiary ${tabIndex}` : "");
+  const [phi, setPhi] = useSessionState<string | null>(`ben:phi${tabKey}`, null);
+  const [regIndex, setRegIndex] = useSessionState<number | null>(`ben:regIndex${tabKey}`, null);
+  const [setStatus, setSetStatus] = useSessionState<{ count: number; capacity: number } | null>(`ben:setStatus${tabKey}`, null);
+  const [finalized, setFinalized] = useSessionState(`ben:finalized${tabKey}`, false);
+  const [registrations, setRegistrations] = useSessionState<Registration[]>(`ben:registrations${tabKey}`, []);
+  const [payments, setPayments] = useSessionState<Payment[]>(`ben:payments${tabKey}`, []);
+  const [walletAddress, setWalletAddress] = useSessionState(`ben:walletAddr${tabKey}`, "");
+  const [walletMnemonic, setWalletMnemonic] = useSessionState(`ben:walletMnemonic${tabKey}`, "");
+  const [walletCreated, setWalletCreated] = useSessionState(`ben:walletCreated${tabKey}`, false);
+  const [registryAddress, setRegistryAddress] = useSessionState(`ben:registryAddr${tabKey}`, "");
 
   // Fee config from server
   const [fees, setFees] = useState<{ beneficiary: number; merchant: number } | null>(null);

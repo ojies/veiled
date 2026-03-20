@@ -150,4 +150,4 @@ The UI expects:
 | `MIN_MERCHANTS` | `2` | Minimum merchants before set creation |
 | `MERCHANT_START_PORT` | `50061` | Starting port for merchant gRPC servers |
 | `MERCHANT_STARTUP_DELAY` | `1500` | Wait time (ms) after spawning merchant |
-| `MATURITY_BLOCKS` | `10` | Blocks mined to mature coinbase outputs |
+| `MATURITY_BLOCKS` | `100` | Blocks mined to mature coinbase outputs |

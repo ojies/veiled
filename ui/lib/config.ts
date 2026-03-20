@@ -23,4 +23,4 @@ export const MERCHANT_START_PORT = intEnv("MERCHANT_START_PORT", 50061);
 export const MERCHANT_STARTUP_DELAY = intEnv("MERCHANT_STARTUP_DELAY", 1500);
 
 /** Number of blocks mined to mature coinbase outputs */
-export const MATURITY_BLOCKS = intEnv("MATURITY_BLOCKS", 10);
+export const MATURITY_BLOCKS = intEnv("MATURITY_BLOCKS", 100);

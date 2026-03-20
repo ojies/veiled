@@ -49,7 +49,7 @@ REGISTRY_DB     := $(DATA_DIR)/registry.db
 UI_PORT              := 3000
 MIN_MERCHANTS        := 2
 BENEFICIARY_CAPACITY := 4
-MATURITY_BLOCKS      := 10
+MATURITY_BLOCKS      := 100
 MERCHANT_START_PORT  := 50061
 
 # ── Merchant seeding config ──

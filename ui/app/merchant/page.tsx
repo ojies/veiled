@@ -33,15 +33,16 @@ export default function MerchantPage() {
     return new URLSearchParams(window.location.search).get("tab");
   });
 
-  // Persisted state (per-tab via sessionStorage)
-  const [merchantName, setMerchantName] = useSessionState("merch:name", tabIndex ? `Merchant ${tabIndex}` : "");
-  const [merchantOrigin, setMerchantOrigin] = useSessionState("merch:origin", "");
-  const [registered, setRegistered] = useSessionState("merch:registered", false);
-  const [serverPort, setServerPort] = useSessionState("merch:port", 0);
-  const [walletAddress, setWalletAddress] = useSessionState("merch:walletAddr", "");
-  const [walletMnemonic, setWalletMnemonic] = useSessionState("merch:walletMnemonic", "");
-  const [walletName, setWalletName] = useSessionState("merch:walletName", "");
-  const [walletCreated, setWalletCreated] = useSessionState("merch:walletCreated", false);
+  // Persisted state (per-tab via sessionStorage, keyed by tab index)
+  const tabKey = tabIndex ? `:${tabIndex}` : "";
+  const [merchantName, setMerchantName] = useSessionState(`merch:name${tabKey}`, tabIndex ? `Merchant ${tabIndex}` : "");
+  const [merchantOrigin, setMerchantOrigin] = useSessionState(`merch:origin${tabKey}`, "");
+  const [registered, setRegistered] = useSessionState(`merch:registered${tabKey}`, false);
+  const [serverPort, setServerPort] = useSessionState(`merch:port${tabKey}`, 0);
+  const [walletAddress, setWalletAddress] = useSessionState(`merch:walletAddr${tabKey}`, "");
+  const [walletMnemonic, setWalletMnemonic] = useSessionState(`merch:walletMnemonic${tabKey}`, "");
+  const [walletName, setWalletName] = useSessionState(`merch:walletName${tabKey}`, "");
+  const [walletCreated, setWalletCreated] = useSessionState(`merch:walletCreated${tabKey}`, false);
 
   // Ephemeral state
   const [serverStatus, setServerStatus] = useState("");

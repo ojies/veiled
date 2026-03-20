@@ -175,7 +175,7 @@ Override at the command line: `make dev MIN_MERCHANTS=3 MATURITY_BLOCKS=20`
 |----------|---------|-------------|
 | `MIN_MERCHANTS` | `2` | Number of merchants to seed |
 | `BENEFICIARY_CAPACITY` | `4` | Slots per anonymity set (power of 2) |
-| `MATURITY_BLOCKS` | `10` | Blocks mined to mature coinbase outputs |
+| `MATURITY_BLOCKS` | `100` | Blocks mined to mature coinbase outputs |
 | `MERCHANT_START_PORT` | `50061` | Starting port for merchant gRPC servers |
 | `MERCHANT_FEE` | `3000` | Registration fee per merchant (sats) |
 | `UI_PORT` | `3000` | Web UI port |
