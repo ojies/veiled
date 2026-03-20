@@ -283,9 +283,9 @@ pub fn prove_payment_identity_registration(
     // E[k] = Σ_{gen} ρ[gen][k]·active_gens[gen] + Σ_j coeff(p_j, x^k)·D[j]
 
     let mut cap_e = [ProjectivePoint::IDENTITY; M];
-    for k in 0..M {
+    for (k, ek) in cap_e.iter_mut().enumerate() {
         for (gen_idx, gen_point) in active_gens.iter().enumerate() {
-            cap_e[k] += *gen_point * rho[gen_idx][k];
+            *ek += *gen_point * rho[gen_idx][k];
         }
     }
 
@@ -359,8 +359,8 @@ pub fn prove_payment_identity_registration(
     let mut z_responses: Vec<[u8; 32]> = Vec::with_capacity(num_active_gens);
     for gen_idx in 0..num_active_gens {
         let mut sum_rho = Scalar::ZERO;
-        for k in 0..M {
-            sum_rho += rho[gen_idx][k] * x_powers[k];
+        for (k, xk) in x_powers.iter().enumerate().take(M) {
+            sum_rho += rho[gen_idx][k] * xk;
         }
         let z = witness_scalars[gen_idx] * x_powers[M] - sum_rho;
         z_responses.push(scalar_to_bytes(&z));
