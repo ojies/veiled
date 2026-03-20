@@ -202,13 +202,14 @@ export default function BeneficiaryPage() {
 
   async function createCredential() {
     if (!name.trim()) return;
+    setLoading("credential");
     // Re-check merchant status on demand
     const ready = await checkInit();
     if (!ready) {
       toast("Not enough merchants registered in the registry. Register merchants first or use the seed merchant faucet on the Demo Controls page.", "error");
+      setLoading("");
       return;
     }
-    setLoading("credential");
     try {
       const data = await api("/api/beneficiary/credential", { name: name.trim() });
       setPhi(data.phi);

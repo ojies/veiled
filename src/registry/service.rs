@@ -37,10 +37,13 @@ impl Registry for RegistryService {
         let req = request.into_inner();
 
         let txid: Txid = {
-            let txid_bytes: [u8; 32] = req
+            let mut txid_bytes: [u8; 32] = req
                 .funding_txid
                 .try_into()
                 .map_err(|_| Status::invalid_argument("funding_txid must be 32 bytes"))?;
+            // Clients send txid in display order (big-endian hex);
+            // Txid::from_byte_array expects internal order (reversed).
+            txid_bytes.reverse();
             Txid::from_byte_array(txid_bytes)
         };
         let outpoint = OutPoint {
@@ -88,10 +91,13 @@ impl Registry for RegistryService {
         let phi = Commitment(phi_bytes);
 
         let txid: Txid = {
-            let txid_bytes: [u8; 32] = req
+            let mut txid_bytes: [u8; 32] = req
                 .funding_txid
                 .try_into()
                 .map_err(|_| Status::invalid_argument("funding_txid must be 32 bytes"))?;
+            // Clients send txid in display order (big-endian hex);
+            // Txid::from_byte_array expects internal order (reversed).
+            txid_bytes.reverse();
             Txid::from_byte_array(txid_bytes)
         };
 

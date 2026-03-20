@@ -127,9 +127,10 @@ export async function POST(request: Request) {
       }
     });
 
+    let stderrBuf = "";
     child.stderr?.on("data", (data: Buffer) => {
-      // Merchant logs go to stderr via tracing
       const msg = data.toString();
+      stderrBuf += msg;
       if (msg.includes("listening") || msg.includes("registered")) {
         const proc = state.merchant_processes[name];
         if (proc) proc.status = "running";
@@ -166,7 +167,7 @@ export async function POST(request: Request) {
       const proc = state.merchant_processes[name];
       if (proc?.status === "stopped") {
         return NextResponse.json(
-          { error: `Merchant process exited before completing registration` },
+          { error: `Merchant process exited before completing registration: ${stderrBuf.trim() || "(no output)"}` },
           { status: 500 }
         );
       }
