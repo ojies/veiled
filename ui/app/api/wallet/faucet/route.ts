@@ -30,18 +30,18 @@ export async function POST(request: Request) {
       }
     }
 
-    // Mine 100 blocks to mature all coinbases
-    faucet(miner.address, 100);
+    // Mine 101 blocks to mature all coinbases (coinbase needs 100 confirmations)
+    faucet(miner.address, 101);
 
     // Fetch updated balances; if below minimum, mine more until threshold is met
     for (const name of names) {
       if (results[name]?.funded) {
         try {
           let bal = getBalance(name);
-          while (bal.total < MIN_FAUCET_SATS) {
+          while (bal.confirmed < MIN_FAUCET_SATS) {
             const wallet = createWallet(name);
             faucet(wallet.address, 1);
-            faucet(miner.address, 100); // mature the new coinbase
+            faucet(miner.address, 101); // mature the new coinbase
             bal = getBalance(name);
           }
           results[name].balance = bal;
