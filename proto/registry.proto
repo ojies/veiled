@@ -32,6 +32,7 @@ message MerchantRequest {
 
 message MerchantResponse {
   string message = 1;
+  uint32 merchant_id = 2;
 }
 
 message BeneficiaryRequest {

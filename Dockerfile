@@ -13,7 +13,6 @@ ENV VEILED_M=${VEILED_M}
 
 RUN cargo build --release \
     --bin veiled-registry-grpc \
-    --bin merchant \
     --bin veiled-core \
     --bin veiled-wallet
 
@@ -54,7 +53,6 @@ WORKDIR /app
 # Rust binaries the UI spawns at runtime
 COPY --from=rust-builder /build/target/release/veiled-core /app/bin/veiled-core
 COPY --from=rust-builder /build/target/release/veiled-wallet /app/bin/veiled-wallet
-COPY --from=rust-builder /build/target/release/merchant /app/bin/merchant
 
 # Proto files for gRPC client
 COPY proto/ /app/proto/
@@ -72,7 +70,6 @@ RUN mkdir -p /app/data/wallets
 
 ENV WALLET_BIN=/app/bin/veiled-wallet \
     HELPER_BIN=/app/bin/veiled-core \
-    MERCHANT_BIN=/app/bin/merchant \
     WALLETS_DIR=/app/data/wallets \
     PROTO_DIR=/app/proto \
     NODE_ENV=production \

@@ -112,6 +112,7 @@ impl Registry for RegistryService {
         info!("register_merchant OK: '{}' (total merchants: {} [{}])", req.name, store.merchant_pool.len(), merchant_names.join(", "));
         Ok(Response::new(MerchantResponse {
             message: format!("Merchant '{}' registered", req.name),
+            merchant_id: id as u32,
         }))
     }
 
@@ -187,6 +188,8 @@ impl Registry for RegistryService {
         info!("finalize_set: set {}", hex::encode(set_id));
 
         let mut registry = self.registery_data.lock().await;
+        // Build the CRS from all registered merchants before committing.
+        registry.setup();
         let mut store = self.store.lock().await;
 
         let commitment_txid = store

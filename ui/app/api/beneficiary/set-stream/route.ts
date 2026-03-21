@@ -10,7 +10,6 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const state = getState();
-  const setId = state.set_id;
 
   const encoder = new TextEncoder();
   let closed = false;
@@ -29,7 +28,11 @@ export async function GET() {
       // Poll set status and push updates
       const pollStatus = async () => {
         try {
-          const resp: any = await grpcCall(getRegistryClient(), "GetAnonymitySet", { set_id: setId });
+          const currentState = getState();
+          const setIdBuf = currentState.set_id_bytes
+            ? Buffer.from(currentState.set_id_bytes, "hex")
+            : Buffer.alloc(32);
+          const resp: any = await grpcCall(getRegistryClient(), "GetAnonymitySet", { set_id: setIdBuf });
           send("status", {
             count: resp.count,
             capacity: resp.capacity,

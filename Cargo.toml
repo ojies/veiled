@@ -12,13 +12,6 @@ path = "src/lib.rs"
 name = "veiled-registry-grpc"
 path = "src/bin/registry_grpc.rs"
 
-[[bin]]
-name = "beneficiary"
-path = "src/bin/beneficiary.rs"
-
-[[bin]]
-name = "merchant"
-path = "src/bin/merchant.rs"
 
 [[bin]]
 name = "veiled-core"

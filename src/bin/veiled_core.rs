@@ -16,6 +16,7 @@ use std::io::Read;
 use veiled::core::beneficiary::Beneficiary;
 use veiled::core::credential::MasterCredential;
 use veiled::core::crs::Crs;
+use veiled::core::merchant::Merchant;
 use veiled::core::payment_identity::serialize_payment_identity_registration_proof;
 use veiled::core::request::create_payment_request;
 use veiled::core::types::{
@@ -105,6 +106,18 @@ struct CreatePaymentIdParams {
 }
 
 #[derive(Deserialize)]
+struct BuildCrsMerchant {
+    name: String,
+    origin: String,
+}
+
+#[derive(Deserialize)]
+struct BuildCrsParams {
+    merchants: Vec<BuildCrsMerchant>,
+    set_size: usize,
+}
+
+#[derive(Deserialize)]
 struct CreatePaymentRequestParams {
     credential_r_hex: String,
     merchant_name: String,
@@ -148,6 +161,21 @@ struct ErrorResponse {
 }
 
 // ── Handlers ──
+
+fn handle_build_crs(params: serde_json::Value) -> Result<serde_json::Value, String> {
+    let p: BuildCrsParams =
+        serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
+    eprintln!("[core] build-crs: {} merchants, set_size={}", p.merchants.len(), p.set_size);
+    let merchants: Vec<Merchant> = p
+        .merchants
+        .iter()
+        .map(|m| Merchant::new(&m.name, &m.origin))
+        .collect();
+    let crs = Crs::setup(merchants, p.set_size);
+    let crs_hex = hex::encode(crs.to_bytes());
+    eprintln!("[core] build-crs OK: {} bytes", crs_hex.len() / 2);
+    Ok(serde_json::json!({ "crs_hex": crs_hex }))
+}
 
 fn handle_create_credential(params: serde_json::Value) -> Result<serde_json::Value, String> {
     let p: CreateCredentialParams =
@@ -279,6 +307,7 @@ fn dispatch(cmd: Command) -> Result<serde_json::Value, String> {
     let start = std::time::Instant::now();
     eprintln!("[core] ── {} ──", cmd_name);
     let result = match cmd.command.as_str() {
+        "build-crs" => handle_build_crs(cmd.params),
         "create-credential" => handle_create_credential(cmd.params),
         "register-locally" => handle_register_locally(cmd.params),
         "create-payment-id" => handle_create_payment_id(cmd.params),

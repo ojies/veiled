@@ -70,6 +70,8 @@ export interface SimState {
   anonymity_set: AnonymitySet | null;
   beneficiaries: Record<string, BeneficiaryState>;
   set_id: number;
+  /** 32-byte commitment txid (hex) — set after FinalizeSet succeeds. */
+  set_id_bytes: string | null;
   wallets: Record<string, WalletInfo>;
   merchant_processes: Record<string, MerchantProcess>;
   funding?: { txid: string; vout: number; amount: number };

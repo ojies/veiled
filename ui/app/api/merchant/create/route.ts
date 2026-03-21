@@ -38,7 +38,7 @@ export async function POST(request: Request) {
     const registry = getRegistryClient();
     const [feesResp, addrResp]: any[] = await Promise.all([
       grpcCall(registry, "GetFees", {}),
-      grpcCall(registry, "GetRegistryAddress", { set_id: 0 }),
+      grpcCall(registry, "GetRegistryAddress", { set_id: Buffer.alloc(32) }),
     ]);
     const merchantFee = feesResp.merchant_fee;
     const registryAddress = addrResp.address;

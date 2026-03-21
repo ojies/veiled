@@ -4,6 +4,8 @@
 //! so both binaries and integration tests can compose them systematically.
 
 use crate::core::crs::Crs;
+use crate::core::merchant::Merchant;
+use crate::core::payment_identity::PaymentIdentityRegistration;
 use crate::core::types::Commitment;
 use crate::registry::pb::registry_client::RegistryClient;
 use crate::registry::pb::{
@@ -13,6 +15,64 @@ use crate::registry::pb::{
 use tonic::transport::Channel;
 
 pub type RegClient = RegistryClient<Channel>;
+
+// ── MerchantState ────────────────────────────────────────────────────────────
+
+/// State held by a merchant after registering with the registry.
+///
+/// Accumulates the CRS and anonymity set once the set is finalized, then
+/// exposes helpers for Phases 3–5 (no gRPC required).
+pub struct MerchantState {
+    pub merchant: Merchant,
+    pub crs: Option<Crs>,
+    pub anonymity_set: Option<Vec<Commitment>>,
+}
+
+impl MerchantState {
+    /// Build a CRS locally from a slice of registered merchant states.
+    ///
+    /// Merchants are sorted by their assigned `merchant_id` so the CRS generators
+    /// match the order the registry assigned them, regardless of slice order.
+    pub fn build_crs(states: &[&MerchantState], set_size: usize) -> Crs {
+        let mut sorted: Vec<&MerchantState> = states.to_vec();
+        sorted.sort_by_key(|s| s.merchant.merchant_id);
+        let merchants: Vec<Merchant> = sorted.iter().map(|s| s.merchant.clone()).collect();
+        Crs::setup(merchants, set_size)
+    }
+
+    /// Attach the finalized CRS and anonymity set.  Call this after
+    /// [`get_crs`] and [`wait_for_finalization`] complete.
+    pub fn attach_set(&mut self, crs: Crs, anonymity_set: Vec<Commitment>) {
+        self.crs = Some(crs);
+        self.anonymity_set = Some(anonymity_set);
+    }
+
+    /// Receive and verify a payment identity registration from a beneficiary
+    /// (Phase 4, local — no gRPC).
+    ///
+    /// Returns the beneficiary's pseudonym on success.
+    /// Requires [`attach_set`] to have been called first.
+    pub fn receive_payment_registration(
+        &mut self,
+        registration: &PaymentIdentityRegistration,
+    ) -> Result<[u8; 33], &'static str> {
+        let crs = self.crs.as_ref().ok_or("CRS not attached; call attach_set first")?;
+        let anonymity_set = self
+            .anonymity_set
+            .as_ref()
+            .ok_or("anonymity set not attached; call attach_set first")?;
+        self.merchant
+            .receive_payment_registration(crs, anonymity_set, registration)
+    }
+
+    /// Derive the P2TR payment address for a pseudonym (Phase 5, local).
+    pub fn payment_address(
+        pseudonym: &[u8; 33],
+        network: bitcoin::Network,
+    ) -> Result<bitcoin::Address, String> {
+        crate::core::request::pseudonym_to_address(pseudonym, network)
+    }
+}
 
 // ── Connection ──────────────────────────────────────────────────────────────
 
@@ -46,6 +106,9 @@ pub async fn get_registry_address(
 }
 
 /// Register a merchant.  Payment verification is done on-chain by the registry.
+///
+/// Returns a [`MerchantState`] containing the `Merchant` object (with the
+/// server-assigned `merchant_id`) ready for subsequent protocol steps.
 pub async fn register_merchant(
     client: &mut RegClient,
     name: &str,
@@ -54,7 +117,7 @@ pub async fn register_merchant(
     phone: &str,
     funding_txid: Vec<u8>,
     funding_vout: u32,
-) -> Result<String, tonic::Status> {
+) -> Result<MerchantState, tonic::Status> {
     let res = client
         .register_merchant(MerchantRequest {
             name: name.to_string(),
@@ -66,7 +129,15 @@ pub async fn register_merchant(
         })
         .await?
         .into_inner();
-    Ok(res.message)
+
+    let mut merchant = Merchant::new(name, origin);
+    merchant.merchant_id = res.merchant_id as usize;
+
+    Ok(MerchantState {
+        merchant,
+        crs: None,
+        anonymity_set: None,
+    })
 }
 
 /// List all registered merchants (name, origin, credential_generator).

@@ -67,6 +67,16 @@ export async function createPaymentId(params: {
   });
 }
 
+export async function buildCrs(params: {
+  merchants: Array<{ name: string; origin: string }>;
+  setSize: number;
+}): Promise<{ crs_hex: string }> {
+  return callCore("build-crs", {
+    merchants: params.merchants,
+    set_size: params.setSize,
+  });
+}
+
 export async function createPaymentRequest(params: {
   credentialRHex: string;
   merchantName: string;

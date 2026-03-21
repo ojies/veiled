@@ -31,10 +31,11 @@ export async function POST(request: Request) {
     const registry = getRegistryClient();
     const phi = Buffer.from(ben.credential.phi, "hex");
 
-    // Step 1: Query the registry's payment address and fees
-    log("ben/register", `querying registry for address and fees (set_id=${state.set_id})`);
+    // Step 1: Query the registry's payment address and fees.
+    // Use all-zero set_id (pre-finalization global address).
+    log("ben/register", `querying registry for address and fees`);
     const [addrResp, feesResp]: any[] = await Promise.all([
-      grpcCall(registry, "GetRegistryAddress", { set_id: state.set_id }),
+      grpcCall(registry, "GetRegistryAddress", { set_id: Buffer.alloc(32) }),
       grpcCall(registry, "GetFees", {}),
     ]);
     const registryAddress = addrResp.address;
@@ -76,9 +77,8 @@ export async function POST(request: Request) {
 
     // Step 5: Register with outpoint (registry verifies payment on-chain)
     const txidBytes = Buffer.from(fundingTxid, "hex");
-    log("ben/register", `calling RegisterBeneficiary on registry (set=${state.set_id}, phi=${ben.credential.phi.slice(0, 16)}...)`);
+    log("ben/register", `calling RegisterBeneficiary (phi=${ben.credential.phi.slice(0, 16)}...)`);
     const resp: any = await grpcCall(registry, "RegisterBeneficiary", {
-      set_id: state.set_id,
       phi,
       name: ben.credential.friendly_name,
       email: "",
@@ -90,27 +90,32 @@ export async function POST(request: Request) {
 
     updateBeneficiary(name, { registered: true, index: resp.index });
 
-    // Refresh anonymity set status
-    const setResp: any = await grpcCall(registry, "GetAnonymitySet", {
-      set_id: state.set_id,
-    });
-    const commitments = (setResp.commitments || []).map((c: Buffer) =>
-      Buffer.from(c).toString("hex")
-    );
-    setAnonymitySet({
-      commitments,
-      finalized: setResp.finalized,
-      count: setResp.count,
-      capacity: setResp.capacity,
-    });
-    setPhase(2);
-    log("ben/register", `set status: ${setResp.count}/${setResp.capacity}, finalized=${setResp.finalized}`);
+    // Step 6: Refresh anonymity set status if the set has been finalized
+    if (state.set_id_bytes) {
+      try {
+        const setIdBuf = Buffer.from(state.set_id_bytes, "hex");
+        const setResp: any = await grpcCall(registry, "GetAnonymitySet", {
+          set_id: setIdBuf,
+        });
+        const commitments = (setResp.commitments || []).map((c: Buffer) =>
+          Buffer.from(c).toString("hex")
+        );
+        setAnonymitySet({
+          commitments,
+          finalized: setResp.finalized,
+          count: setResp.count,
+          capacity: setResp.capacity,
+        });
+        setPhase(2);
+        log("ben/register", `set status: ${setResp.count}/${setResp.capacity}, finalized=${setResp.finalized}`);
+      } catch (e: any) {
+        log("ben/register", `GetAnonymitySet skipped: ${e.message}`);
+      }
+    }
 
     return NextResponse.json({
       name,
       index: resp.index,
-      set_count: setResp.count,
-      set_capacity: setResp.capacity,
       payment: {
         txid: fundingTxid,
         vout: fundingVout,

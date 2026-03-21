@@ -114,7 +114,6 @@ services:
       - REGISTRY_SERVER=http://registry:50051
       - WALLET_BIN=/app/bin/veiled-wallet
       - CORE_BIN=/app/bin/veiled-core
-      - MERCHANT_BIN=/app/bin/merchant
       - WALLETS_DIR=/app/data/wallets
       - PROTO_DIR=/app/proto
       - PORT=3000

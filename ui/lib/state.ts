@@ -9,6 +9,7 @@ const state: SimState = {
   anonymity_set: null,
   beneficiaries: {},
   set_id: 1,
+  set_id_bytes: null,
   wallets: {},
   merchant_processes: {},
 };
@@ -24,10 +25,15 @@ export function resetState(): void {
   state.anonymity_set = null;
   state.beneficiaries = {};
   state.set_id = 1;
+  state.set_id_bytes = null;
   state.wallets = {};
   state.merchant_processes = {};
   state.funding = undefined;
   state.registry_address = undefined;
+}
+
+export function setSetIdBytes(hex: string): void {
+  state.set_id_bytes = hex;
 }
 
 export function setPhase(phase: number): void {
