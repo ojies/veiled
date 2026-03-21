@@ -10,6 +10,7 @@ import {
   MERCHANT_START_PORT,
   MATURITY_BLOCKS,
 } from "@/lib/config";
+import { log, logError } from "@/lib/log";
 
 const MERCHANT_BIN =
   process.env.MERCHANT_BIN ||
@@ -24,6 +25,7 @@ let nextPort = MERCHANT_START_PORT;
 export async function POST(request: Request) {
   try {
     const { name, origin } = await request.json();
+    log("merchant/create", `name='${name}', origin='${origin}'`);
     if (!name || !origin) {
       return NextResponse.json(
         { error: "name and origin required" },
@@ -63,8 +65,10 @@ export async function POST(request: Request) {
     await faucet(dummyWallet.address, MATURITY_BLOCKS);
 
     // Pay merchant registration fee to registry
+    log("merchant/create", `paying ${merchantFee} sats to registry ${registryAddress.slice(0, 20)}...`);
     const sendResult = await send(walletName, registryAddress, merchantFee);
     const fundingTxid = sendResult.txid;
+    log("merchant/create", `fee tx: ${fundingTxid}`);
     await faucet(dummyWallet.address, 1);
 
     // Find the correct vout (the output paying the registry address)
@@ -91,6 +95,7 @@ export async function POST(request: Request) {
     const listenAddr = `0.0.0.0:${port}`;
 
     // Spawn merchant gRPC server
+    log("merchant/create", `spawning merchant binary on port ${port}`, { fundingTxid, fundingVout, setId: state.set_id });
     const child = spawn(
       MERCHANT_BIN,
       [
@@ -131,13 +136,15 @@ export async function POST(request: Request) {
     child.stderr?.on("data", (data: Buffer) => {
       const msg = data.toString();
       stderrBuf += msg;
+      log("merchant/create", `[${name} stderr] ${msg.trim()}`);
       if (msg.includes("listening") || msg.includes("registered")) {
         const proc = state.merchant_processes[name];
         if (proc) proc.status = "running";
       }
     });
 
-    child.on("exit", () => {
+    child.on("exit", (code) => {
+      log("merchant/create", `[${name}] process exited with code ${code}`);
       const proc = state.merchant_processes[name];
       if (proc) proc.status = "stopped";
     });
@@ -174,6 +181,7 @@ export async function POST(request: Request) {
     }
 
     if (!confirmed) {
+      logError("merchant/create", `registration timed out for '${name}'`);
       return NextResponse.json(
         { error: "Merchant registration timed out — check registry logs" },
         { status: 500 }
@@ -181,6 +189,7 @@ export async function POST(request: Request) {
     }
 
     const balance = await getBalance(walletName);
+    log("merchant/create", `'${name}' registered OK on port ${port}, balance=${balance.total}`);
 
     return NextResponse.json({
       name,
@@ -191,6 +200,7 @@ export async function POST(request: Request) {
       status: "running",
     });
   } catch (err: any) {
+    logError("merchant/create", `failed for '${name}'`, err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

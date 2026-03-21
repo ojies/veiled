@@ -180,18 +180,18 @@ start-registry:
 	fi
 
 init-chain:
-	@echo "⛏  Initializing chain (mining blocks, funding registry)..."
+	@echo "⛏  Initializing chain (pre-mining 200 blocks, funding registry)..."
 	@# Create miner wallet
 	@$(WALLET_BIN) <<< '{"command":"create-wallet","state_path":"$(WALLETS)/miner.json","name":"miner","rpc_url":"$(BTC_RPC_URL)","rpc_user":"$(BTC_RPC_USER)","rpc_pass":"$(BTC_RPC_PASS)"}' > /dev/null 2>&1 || true
-	@# Get miner address
+	@# Pre-mine 200 blocks to miner (first 100 mature → ~5000 BTC spendable)
 	@MINER_ADDR=$$($(WALLET_BIN) <<< '{"command":"get-address","state_path":"$(WALLETS)/miner.json","rpc_url":"$(BTC_RPC_URL)","rpc_user":"$(BTC_RPC_USER)","rpc_pass":"$(BTC_RPC_PASS)"}' | grep -o '"address":"[^"]*"' | head -1 | cut -d'"' -f4); \
 	echo "  Miner: $$MINER_ADDR"; \
-	$(WALLET_BIN) <<< "{\"command\":\"faucet\",\"address\":\"$$MINER_ADDR\",\"blocks\":101,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1; \
+	$(WALLET_BIN) <<< "{\"command\":\"faucet\",\"address\":\"$$MINER_ADDR\",\"blocks\":200,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1; \
 	REGISTRY_ADDR=$$($(WALLET_BIN) <<< '{"command":"get-address","state_path":"$(WALLETS)/registry.json","rpc_url":"$(BTC_RPC_URL)","rpc_user":"$(BTC_RPC_USER)","rpc_pass":"$(BTC_RPC_PASS)"}' | grep -o '"address":"[^"]*"' | head -1 | cut -d'"' -f4); \
 	echo "  Registry: $$REGISTRY_ADDR"; \
-	$(WALLET_BIN) <<< "{\"command\":\"faucet\",\"address\":\"$$REGISTRY_ADDR\",\"blocks\":1,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1; \
-	$(WALLET_BIN) <<< "{\"command\":\"faucet\",\"address\":\"$$MINER_ADDR\",\"blocks\":100,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1
-	@echo "✅ Chain initialized, registry funded"
+	$(WALLET_BIN) <<< "{\"command\":\"send\",\"state_path\":\"$(WALLETS)/miner.json\",\"to_address\":\"$$REGISTRY_ADDR\",\"amount_sats\":100000000,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1; \
+	$(WALLET_BIN) <<< "{\"command\":\"faucet\",\"address\":\"$$MINER_ADDR\",\"blocks\":1,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1
+	@echo "✅ Chain initialized (~5000 BTC in miner, 1 BTC in registry)"
 
 start-ui:
 	@if [ -f $(PIDS_DIR)/ui.pid ] && kill -0 $$(cat $(PIDS_DIR)/ui.pid) 2>/dev/null; then \

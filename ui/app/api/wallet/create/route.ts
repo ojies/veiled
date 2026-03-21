@@ -5,10 +5,12 @@
 import { NextResponse } from "next/server";
 import { createWallet, walletExists } from "@/lib/wallet";
 import { setWallet, getWallet } from "@/lib/state";
+import { log, logError } from "@/lib/log";
 
 export async function POST(request: Request) {
   try {
     const { name, role } = await request.json();
+    log("wallet/create", `name='${name}', role='${role}'`);
     if (!name) {
       return NextResponse.json({ error: "name required" }, { status: 400 });
     }
@@ -17,6 +19,7 @@ export async function POST(request: Request) {
     if (walletExists(name)) {
       const existing = getWallet(name);
       if (existing) {
+        log("wallet/create", `already exists in memory: ${existing.address}`);
         return NextResponse.json({
           address: existing.address,
           mnemonic: existing.mnemonic,
@@ -28,6 +31,7 @@ export async function POST(request: Request) {
 
     // Create wallet (or load existing from state file — handled by Rust binary)
     const result = await createWallet(name);
+    log("wallet/create", `created: ${result.address}`, { existing: result.existing });
 
     setWallet(name, {
       address: result.address,
@@ -38,6 +42,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result);
   } catch (err: any) {
+    logError("wallet/create", "failed", err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

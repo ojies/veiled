@@ -152,9 +152,13 @@ struct ErrorResponse {
 fn handle_create_credential(params: serde_json::Value) -> Result<serde_json::Value, String> {
     let p: CreateCredentialParams =
         serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
+    eprintln!("[core] create-credential for '{}'", p.name);
     let crs_bytes = hex::decode(&p.crs_hex).map_err(|e| format!("crs hex: {e}"))?;
+    eprintln!("[core] CRS decoded: {} bytes", crs_bytes.len());
     let crs = Crs::from_bytes(&crs_bytes).map_err(|e| e.to_string())?;
+    eprintln!("[core] CRS parsed: {} merchants, {} generators", crs.merchants.len(), crs.generators.len());
     let ben = Beneficiary::new(&crs, &p.name);
+    eprintln!("[core] credential created for '{}': phi = {}...", p.name, hex::encode(&ben.credential.phi.0[..8]));
     let resp = CreateCredentialResponse {
         credential: CredentialJson::from_credential(&ben.credential),
     };
@@ -165,6 +169,7 @@ fn handle_register_locally(params: serde_json::Value) -> Result<serde_json::Valu
     let p: RegisterLocallyParams =
         serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
     let credential = p.credential.to_credential()?;
+    eprintln!("[core] register-locally: phi = {}..., set size = {}", hex::encode(&credential.phi.0[..8]), p.commitments_hex.len());
     let commitments: Vec<Commitment> = p
         .commitments_hex
         .iter()
@@ -174,6 +179,7 @@ fn handle_register_locally(params: serde_json::Value) -> Result<serde_json::Valu
         .iter()
         .position(|c| *c == credential.phi)
         .ok_or("commitment not found in set")?;
+    eprintln!("[core] register-locally: found own commitment at index {}", index);
     let resp = RegisterLocallyResponse { index };
     serde_json::to_value(resp).map_err(|e| e.to_string())
 }
@@ -181,6 +187,10 @@ fn handle_register_locally(params: serde_json::Value) -> Result<serde_json::Valu
 fn handle_create_payment_id(params: serde_json::Value) -> Result<serde_json::Value, String> {
     let p: CreatePaymentIdParams =
         serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
+    eprintln!(
+        "[core] create-payment-id: merchant_id={}, set_id={}, index={}, set_size={}",
+        p.merchant_id, p.set_id, p.index, p.commitments_hex.len()
+    );
     let credential = p.credential.to_credential()?;
     let crs_bytes = hex::decode(&p.crs_hex).map_err(|e| format!("crs hex: {e}"))?;
     let crs = Crs::from_bytes(&crs_bytes).map_err(|e| e.to_string())?;
@@ -203,10 +213,21 @@ fn handle_create_payment_id(params: serde_json::Value) -> Result<serde_json::Val
         registrations: std::collections::HashMap::new(),
     };
 
+    eprintln!("[core] generating ZK proof for merchant_id={}...", p.merchant_id);
+    let start = std::time::Instant::now();
     let reg = ben
         .create_payment_registration(&crs, p.merchant_id)
         .map_err(|e| e.to_string())?;
     let proof_bytes = serialize_payment_identity_registration_proof(&reg.proof);
+    let elapsed = start.elapsed();
+
+    eprintln!(
+        "[core] ZK proof generated in {:.1}ms: pseudonym={}..., nullifier={}..., proof={} bytes",
+        elapsed.as_secs_f64() * 1000.0,
+        hex::encode(&reg.pseudonym[..8]),
+        hex::encode(&reg.public_nullifier[..8]),
+        proof_bytes.len()
+    );
 
     let resp = CreatePaymentIdResponse {
         pseudonym: hex::encode(reg.pseudonym),
@@ -222,6 +243,10 @@ fn handle_create_payment_id(params: serde_json::Value) -> Result<serde_json::Val
 fn handle_create_payment_request(params: serde_json::Value) -> Result<serde_json::Value, String> {
     let p: CreatePaymentRequestParams =
         serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
+    eprintln!(
+        "[core] create-payment-request: merchant='{}', amount={} sats",
+        p.merchant_name, p.amount
+    );
     let r_bytes = hex_to_32(&p.credential_r_hex)?;
     let child_randomness = ChildRandomness(r_bytes);
     let name = Name::new(&p.merchant_name);
@@ -230,6 +255,13 @@ fn handle_create_payment_request(params: serde_json::Value) -> Result<serde_json
         .ok_or("invalid generator point")?;
 
     let req = create_payment_request(&child_randomness, &name, &g, p.amount);
+
+    eprintln!(
+        "[core] payment request: pseudonym={}..., proof_r={}..., {} sats",
+        hex::encode(&req.pseudonym[..8]),
+        hex::encode(&req.proof.r[..8]),
+        req.amount
+    );
 
     let resp = CreatePaymentRequestResponse {
         pseudonym: hex::encode(req.pseudonym),
@@ -243,14 +275,23 @@ fn handle_create_payment_request(params: serde_json::Value) -> Result<serde_json
 // ── Command dispatch ──
 
 fn dispatch(cmd: Command) -> Result<serde_json::Value, String> {
-    match cmd.command.as_str() {
+    let cmd_name = cmd.command.clone();
+    let start = std::time::Instant::now();
+    eprintln!("[core] ── {} ──", cmd_name);
+    let result = match cmd.command.as_str() {
         "create-credential" => handle_create_credential(cmd.params),
         "register-locally" => handle_register_locally(cmd.params),
         "create-payment-id" => handle_create_payment_id(cmd.params),
         "create-payment-request" => handle_create_payment_request(cmd.params),
         "ping" => Ok(serde_json::json!({"status": "ok"})),
         other => Err(format!("unknown command: {other}")),
+    };
+    let elapsed = start.elapsed();
+    match &result {
+        Ok(_) => eprintln!("[core] ── {} OK ({:.1}ms) ──", cmd_name, elapsed.as_secs_f64() * 1000.0),
+        Err(e) => eprintln!("[core] ── {} FAILED ({:.1}ms): {} ──", cmd_name, elapsed.as_secs_f64() * 1000.0, e),
     }
+    result
 }
 
 // ── Main ──
@@ -261,6 +302,7 @@ fn main() {
     let daemon = std::env::args().any(|a| a == "--daemon");
 
     if daemon {
+        eprintln!("[core] daemon started (pid: {})", std::process::id());
         let stdin = std::io::stdin();
         let reader = stdin.lock();
         for line in reader.lines() {

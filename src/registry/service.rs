@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
+use tracing::{info, warn};
 
 pub struct RegistryService {
     pub store: Arc<Mutex<RegistryStore>>,
@@ -35,14 +36,13 @@ impl Registry for RegistryService {
         request: Request<MerchantRequest>,
     ) -> Result<Response<MerchantResponse>, Status> {
         let req = request.into_inner();
+        info!("register_merchant: name='{}', origin='{}', funding={}:{}", req.name, req.origin, hex::encode(&req.funding_txid), req.funding_vout);
 
         let txid: Txid = {
             let mut txid_bytes: [u8; 32] = req
                 .funding_txid
                 .try_into()
                 .map_err(|_| Status::invalid_argument("funding_txid must be 32 bytes"))?;
-            // Clients send txid in display order (big-endian hex);
-            // Txid::from_byte_array expects internal order (reversed).
             txid_bytes.reverse();
             Txid::from_byte_array(txid_bytes)
         };
@@ -54,7 +54,11 @@ impl Registry for RegistryService {
         let mut store = self.store.lock().await;
         store
             .register_merchant(&req.name, &req.origin, req.email, req.phone, outpoint)
-            .map_err(Status::already_exists)?;
+            .map_err(|e| {
+                warn!("register_merchant FAILED for '{}': {}", req.name, e);
+                Status::already_exists(e)
+            })?;
+        info!("register_merchant OK: '{}' (total merchants: {})", req.name, store.merchant_pool.len());
         Ok(Response::new(MerchantResponse {
             message: format!("Merchant '{}' registered", req.name),
         }))
@@ -65,6 +69,13 @@ impl Registry for RegistryService {
         request: Request<CreateSetRequest>,
     ) -> Result<Response<CreateSetResponse>, Status> {
         let req = request.into_inner();
+        info!(
+            "create_set: id={}, merchants=[{}], capacity={}, sats_per_user={}",
+            req.set_id,
+            req.merchant_names.join(", "),
+            req.beneficiary_capacity,
+            req.sats_per_user
+        );
         let mut store = self.store.lock().await;
         store
             .create_set(
@@ -73,7 +84,11 @@ impl Registry for RegistryService {
                 req.beneficiary_capacity as usize,
                 req.sats_per_user,
             )
-            .map_err(Status::invalid_argument)?;
+            .map_err(|e| {
+                warn!("create_set FAILED for set {}: {}", req.set_id, e);
+                Status::invalid_argument(e)
+            })?;
+        info!("create_set OK: set {} created", req.set_id);
         Ok(Response::new(CreateSetResponse {
             message: format!("Set {} created", req.set_id),
         }))
@@ -84,6 +99,14 @@ impl Registry for RegistryService {
         request: Request<BeneficiaryRequest>,
     ) -> Result<Response<BeneficiaryResponse>, Status> {
         let req = request.into_inner();
+        info!(
+            "register_beneficiary: set={}, name='{}', phi={}..., funding={}:{}",
+            req.set_id,
+            req.name,
+            hex::encode(&req.phi[..8.min(req.phi.len())]),
+            hex::encode(&req.funding_txid),
+            req.funding_vout
+        );
         let phi_bytes: [u8; 33] = req
             .phi
             .try_into()
@@ -95,8 +118,6 @@ impl Registry for RegistryService {
                 .funding_txid
                 .try_into()
                 .map_err(|_| Status::invalid_argument("funding_txid must be 32 bytes"))?;
-            // Clients send txid in display order (big-endian hex);
-            // Txid::from_byte_array expects internal order (reversed).
             txid_bytes.reverse();
             Txid::from_byte_array(txid_bytes)
         };
@@ -109,7 +130,14 @@ impl Registry for RegistryService {
         let mut store = self.store.lock().await;
         let index = store
             .register_beneficiary(req.set_id, phi, outpoint)
-            .map_err(Status::invalid_argument)?;
+            .map_err(|e| {
+                warn!("register_beneficiary FAILED for set {}: {}", req.set_id, e);
+                Status::invalid_argument(e)
+            })?;
+
+        let count = store.active_sets.get(&req.set_id).map(|s| s.registry.beneficiary_count()).unwrap_or(0);
+        let capacity = store.active_sets.get(&req.set_id).map(|s| s.beneficiary_capacity).unwrap_or(0);
+        info!("register_beneficiary OK: '{}' at index {} (set {}: {}/{})", req.name, index, req.set_id, count, capacity);
 
         Ok(Response::new(BeneficiaryResponse {
             message: "Beneficiary registered".to_string(),
@@ -122,11 +150,15 @@ impl Registry for RegistryService {
         request: Request<FinalizeSetRequest>,
     ) -> Result<Response<FinalizeSetResponse>, Status> {
         let req = request.into_inner();
+        info!("finalize_set: set {}", req.set_id);
         let mut store = self.store.lock().await;
         let message = store
             .finalize_set(req.set_id)
-            .map_err(Status::failed_precondition)?;
-
+            .map_err(|e| {
+                warn!("finalize_set FAILED for set {}: {}", req.set_id, e);
+                Status::failed_precondition(e)
+            })?;
+        info!("finalize_set OK: set {} — {}", req.set_id, message);
         Ok(Response::new(FinalizeSetResponse { message }))
     }
 
@@ -135,6 +167,7 @@ impl Registry for RegistryService {
         _request: Request<GetMerchantsRequest>,
     ) -> Result<Response<GetMerchantsResponse>, Status> {
         let store = self.store.lock().await;
+        info!("get_merchants: returning {} merchants", store.merchant_pool.len());
         let merchants: Vec<MerchantEntry> = store
             .merchant_pool
             .values()
@@ -155,8 +188,12 @@ impl Registry for RegistryService {
         let store = self.store.lock().await;
         let registry = store
             .get_crs(req.set_id)
-            .map_err(Status::not_found)?;
+            .map_err(|e| {
+                warn!("get_crs FAILED for set {}: {}", req.set_id, e);
+                Status::not_found(e)
+            })?;
         let crs_bytes = registry.crs.to_bytes();
+        info!("get_crs: set {} -> {} bytes", req.set_id, crs_bytes.len());
         Ok(Response::new(GetCrsResponse { crs_bytes }))
     }
 
@@ -168,7 +205,17 @@ impl Registry for RegistryService {
         let store = self.store.lock().await;
         let active_set = store
             .get_anonymity_set(req.set_id)
-            .map_err(Status::not_found)?;
+            .map_err(|e| {
+                warn!("get_anonymity_set FAILED for set {}: {}", req.set_id, e);
+                Status::not_found(e)
+            })?;
+        info!(
+            "get_anonymity_set: set {} -> {}/{} members, finalized={}",
+            req.set_id,
+            active_set.registry.beneficiary_count(),
+            active_set.beneficiary_capacity,
+            active_set.finalized
+        );
 
         let commitments: Vec<Vec<u8>> = active_set
             .registry
@@ -206,6 +253,7 @@ impl Registry for RegistryService {
     ) -> Result<Response<GetFeesResponse>, Status> {
         let store = self.store.lock().await;
         let fees = store.get_fees();
+        info!("get_fees: merchant={} sats, beneficiary={} sats", fees.merchant_registration_fee, fees.min_sats_per_user);
         Ok(Response::new(GetFeesResponse {
             beneficiary_fee: fees.min_sats_per_user,
             merchant_fee: fees.merchant_registration_fee,
@@ -217,6 +265,7 @@ impl Registry for RegistryService {
         request: Request<GetAnonymitySetRequest>,
     ) -> Result<Response<Self::SubscribeSetFinalizationStream>, Status> {
         let set_id = request.into_inner().set_id;
+        info!("subscribe_set_finalization: set {}", set_id);
         let store = self.store.clone();
 
         // Get a watch receiver (briefly lock store)

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use rusqlite::Connection;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
+use tracing::{info, warn};
 
 use bitcoin::Network;
 // TODO: make network configurable via environment variable for testnet/mainnet support
@@ -65,6 +66,12 @@ impl MerchantService for MerchantGrpcService {
         request: Request<PaymentRegistrationRequest>,
     ) -> Result<Response<PaymentRegistrationResponse>, Status> {
         let req = request.into_inner();
+        info!(
+            "submit_payment_registration: '{}' (set={}, service_index={}, pseudonym={}..., proof={} bytes)",
+            req.friendly_name, req.set_id, req.service_index,
+            hex::encode(&req.pseudonym[..8.min(req.pseudonym.len())]),
+            req.proof.len()
+        );
 
         let pseudonym: [u8; 33] = req
             .pseudonym
@@ -80,6 +87,7 @@ impl MerchantService for MerchantGrpcService {
         {
             let nullifiers = self.known_nullifiers.lock().await;
             if nullifiers.contains(&public_nullifier) {
+                warn!("Duplicate nullifier for '{}': {}...", req.friendly_name, hex::encode(&public_nullifier[..8]));
                 return Err(Status::already_exists(
                     "nullifier already registered with this merchant",
                 ));
@@ -87,7 +95,10 @@ impl MerchantService for MerchantGrpcService {
         }
 
         let proof = deserialize_payment_identity_registration_proof(&req.proof)
-            .map_err(|e| Status::invalid_argument(format!("invalid proof: {}", e)))?;
+            .map_err(|e| {
+                warn!("Invalid proof for '{}': {}", req.friendly_name, e);
+                Status::invalid_argument(format!("invalid proof: {}", e))
+            })?;
 
         let registration = PaymentIdentityRegistration {
             pseudonym,
@@ -103,10 +114,22 @@ impl MerchantService for MerchantGrpcService {
         };
 
         // ── Core verification + in-memory registration ──────────────────
+        info!("Verifying ZK proof for '{}'...", req.friendly_name);
+        let start = std::time::Instant::now();
         let mut merchant = self.merchant.lock().await;
         merchant
             .receive_payment_registration(&self.crs, &self.anonymity_set, &registration)
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+            .map_err(|e| {
+                warn!("ZK proof verification FAILED for '{}': {}", req.friendly_name, e);
+                Status::invalid_argument(e.to_string())
+            })?;
+        let elapsed = start.elapsed();
+        info!(
+            "ZK proof verified for '{}' in {:.1}ms (total identities: {})",
+            req.friendly_name,
+            elapsed.as_secs_f64() * 1000.0,
+            merchant.registered_identities.len()
+        );
 
         // ── Record nullifier ────────────────────────────────────────────
         {
@@ -129,6 +152,7 @@ impl MerchantService for MerchantGrpcService {
                     &proof_blob,
                 )
                 .map_err(|e| Status::internal(format!("DB error: {}", e)))?;
+                info!("Persisted identity '{}' to SQLite", req.friendly_name);
             }
         }
 
@@ -145,6 +169,11 @@ impl MerchantService for MerchantGrpcService {
         request: Request<PaymentRequestMsg>,
     ) -> Result<Response<PaymentRequestResponse>, Status> {
         let req = request.into_inner();
+        info!(
+            "submit_payment_request: {} sats, pseudonym={}...",
+            req.amount,
+            hex::encode(&req.pseudonym[..8.min(req.pseudonym.len())])
+        );
 
         let pseudonym: [u8; 33] = req
             .pseudonym
@@ -168,17 +197,27 @@ impl MerchantService for MerchantGrpcService {
 
         let verified = verify_payment_request(&self.crs.g, &pseudonym, &proof);
         if !verified {
+            warn!("Payment request proof INVALID for pseudonym {}...", hex::encode(&pseudonym[..8]));
             return Err(Status::invalid_argument("payment request proof is invalid"));
         }
+        info!("Schnorr proof verified for pseudonym {}...", hex::encode(&pseudonym[..8]));
 
         let merchant = self.merchant.lock().await;
         let registered = merchant
             .registered_identities
             .get(&pseudonym)
-            .ok_or_else(|| Status::not_found("pseudonym not registered with this merchant"))?;
+            .ok_or_else(|| {
+                warn!("Pseudonym {}... not registered", hex::encode(&pseudonym[..8]));
+                Status::not_found("pseudonym not registered with this merchant")
+            })?;
 
         let address = pseudonym_to_address(&pseudonym, Network::Regtest)
             .map_err(|e| Status::internal(format!("failed to derive address: {}", e)))?;
+
+        info!(
+            "Payment request OK: '{}' -> {} sats -> {}",
+            registered.friendly_name, req.amount, address
+        );
 
         Ok(Response::new(PaymentRequestResponse {
             address: address.to_string(),

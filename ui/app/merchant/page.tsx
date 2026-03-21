@@ -7,6 +7,7 @@ import WalletCard from "@/components/WalletCard";
 import HexDisplay from "@/components/HexDisplay";
 import { useToast } from "@/components/ToastProvider";
 import { useSessionState } from "@/lib/useLocalState";
+import { MERCHANT_NAMES } from "@/lib/demo-participants";
 
 interface Identity {
   beneficiary: string;
@@ -35,8 +36,9 @@ export default function MerchantPage() {
 
   // Persisted state (per-tab via sessionStorage, keyed by tab index)
   const tabKey = tabIndex ? `:${tabIndex}` : "";
-  const [merchantName, setMerchantName] = useSessionState(`merch:name${tabKey}`, tabIndex ? `Merchant ${tabIndex}` : "");
-  const [merchantOrigin, setMerchantOrigin] = useSessionState(`merch:origin${tabKey}`, "");
+  const defaultMerchant = tabIndex ? (MERCHANT_NAMES[Number(tabIndex)] ?? null) : null;
+  const [merchantName, setMerchantName] = useSessionState(`merch:name${tabKey}`, defaultMerchant?.name ?? "");
+  const [merchantOrigin, setMerchantOrigin] = useSessionState(`merch:origin${tabKey}`, defaultMerchant?.origin ?? "");
   const [registered, setRegistered] = useSessionState(`merch:registered${tabKey}`, false);
   const [serverPort, setServerPort] = useSessionState(`merch:port${tabKey}`, 0);
   const [walletAddress, setWalletAddress] = useSessionState(`merch:walletAddr${tabKey}`, "");
@@ -109,7 +111,15 @@ export default function MerchantPage() {
     if (walletCreated) {
       refreshBalance();
       const interval = setInterval(refreshBalance, 5000);
-      return () => clearInterval(interval);
+      // Also refresh when user returns to this tab
+      const onVisible = () => {
+        if (document.visibilityState === "visible") refreshBalance();
+      };
+      document.addEventListener("visibilitychange", onVisible);
+      return () => {
+        clearInterval(interval);
+        document.removeEventListener("visibilitychange", onVisible);
+      };
     }
   }, [walletCreated, refreshBalance]);
 

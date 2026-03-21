@@ -1,28 +1,35 @@
-// POST /api/wallet/faucet — Mine regtest blocks to fund wallets
+// POST /api/wallet/faucet — Fund wallets by sending from the pre-mined miner wallet
 //
 // Accepts either:
-//   { address: "bcrt1p..." }  — fund a specific address
-//   { names: ["alice", ...] } — fund named wallets
+//   { address: "bcrt1p..." }  — send to a specific address
+//   { names: ["alice", ...] } — send to named wallets
 
 import { NextResponse } from "next/server";
-import { faucet, createWallet } from "@/lib/wallet";
+import { faucet, send, createWallet, getAddress } from "@/lib/wallet";
+import { FAUCET_AMOUNT_SATS } from "@/lib/config";
+import { log, logError } from "@/lib/log";
+
+const MINER_WALLET = "miner";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
+    log("wallet/faucet", "request", body);
 
-    // Ensure a miner wallet exists for maturing coinbases
-    const miner = await createWallet("faucet-miner");
+    // Get the miner address for confirmation mining
+    const miner = await getAddress(MINER_WALLET);
 
     // ── Fund by address ──
     if (body.address && typeof body.address === "string") {
       const addr = body.address.trim();
-      const result = await faucet(addr, 10);
-      await faucet(miner.address, 101);
+      log("wallet/faucet", `funding address ${addr.slice(0, 20)}... with ${FAUCET_AMOUNT_SATS} sats`);
+      await send(MINER_WALLET, addr, FAUCET_AMOUNT_SATS);
+      await faucet(miner.address, 1);
+      log("wallet/faucet", `funded ${addr.slice(0, 20)}... OK`);
 
       return NextResponse.json({
         address: addr,
-        blocks_mined: result.blocks_mined,
+        amount_sats: FAUCET_AMOUNT_SATS,
         funded: true,
       });
     }
@@ -41,18 +48,19 @@ export async function POST(request: Request) {
     for (const name of names) {
       try {
         const wallet = await createWallet(name); // idempotent
-        await faucet(wallet.address, 10);
-        results[name] = { address: wallet.address, funded: true };
+        await send(MINER_WALLET, wallet.address, FAUCET_AMOUNT_SATS);
+        results[name] = { address: wallet.address, amount_sats: FAUCET_AMOUNT_SATS, funded: true };
       } catch (e: any) {
         results[name] = { error: e.message };
       }
     }
 
-    // Mine 101 blocks to mature all coinbases (coinbase needs 100 confirmations)
-    await faucet(miner.address, 101);
+    // Mine 1 block to confirm all sends
+    await faucet(miner.address, 1);
 
     return NextResponse.json({ results });
   } catch (err: any) {
+    logError("wallet/faucet", "failed", err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

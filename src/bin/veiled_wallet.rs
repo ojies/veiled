@@ -120,6 +120,16 @@ struct WalletState {
     /// Block hash at checkpoint_height
     #[serde(default)]
     checkpoint_hash: Option<String>,
+    /// Cached balance (updated after each sync)
+    #[serde(default)]
+    cached_balance: Option<CachedBalance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct CachedBalance {
+    confirmed: u64,
+    unconfirmed: u64,
+    total: u64,
 }
 
 // ── Error response ──
@@ -147,8 +157,14 @@ fn rpc_client(url: &str, user: &str, pass: &str) -> Result<Client, String> {
 }
 
 fn load_state(path: &str) -> Result<WalletState, String> {
-    let data = std::fs::read_to_string(path).map_err(|e| format!("read state: {e}"))?;
-    serde_json::from_str(&data).map_err(|e| format!("parse state: {e}"))
+    let data = std::fs::read_to_string(path).map_err(|e| {
+        eprintln!("[wallet] ERROR: read state '{}': {e}", path);
+        format!("read state '{}': {e}", path)
+    })?;
+    serde_json::from_str(&data).map_err(|e| {
+        eprintln!("[wallet] ERROR: parse state '{}': {e}", path);
+        format!("parse state '{}': {e}", path)
+    })
 }
 
 fn save_state(path: &str, state: &WalletState) -> Result<(), String> {
@@ -190,7 +206,12 @@ fn recreate_wallet(state: &WalletState) -> Result<Wallet, String> {
                 chain: Some(cp),
                 ..Default::default()
             });
+            eprintln!("[wallet] {} restored checkpoint at height {} ({}...)", state.wallet_name, height, &hash_hex[..12]);
+        } else {
+            eprintln!("[wallet] {} WARNING: failed to parse checkpoint hash '{}'", state.wallet_name, hash_hex);
         }
+    } else {
+        eprintln!("[wallet] {} no checkpoint saved — will sync from genesis", state.wallet_name);
     }
 
     Ok(wallet)
@@ -199,9 +220,12 @@ fn recreate_wallet(state: &WalletState) -> Result<Wallet, String> {
 /// Sync a BDK wallet with bitcoind blocks and mempool.
 fn sync_wallet(wallet: &mut Wallet, rpc: &Client) -> Result<(), String> {
     let tip = wallet.latest_checkpoint();
+    let start_height = tip.height();
+    let start_time = std::time::Instant::now();
     let empty_mempool: Vec<std::sync::Arc<bdk_wallet::bitcoin::Transaction>> = vec![];
-    let mut emitter = Emitter::new(rpc, tip.clone(), tip.height(), empty_mempool);
+    let mut emitter = Emitter::new(rpc, tip.clone(), start_height, empty_mempool);
 
+    let mut blocks_synced = 0u32;
     while let Some(block_event) = emitter
         .next_block()
         .map_err(|e| format!("sync block: {e}"))?
@@ -213,13 +237,22 @@ fn sync_wallet(wallet: &mut Wallet, rpc: &Client) -> Result<(), String> {
                 block_event.connected_to(),
             )
             .map_err(|e| format!("apply block: {e}"))?;
+        blocks_synced += 1;
     }
 
     // Sync mempool
     let mempool = emitter
         .mempool()
         .map_err(|e| format!("sync mempool: {e}"))?;
+    let mempool_count = mempool.update.len();
     wallet.apply_unconfirmed_txs(mempool.update);
+
+    let elapsed = start_time.elapsed();
+    let final_height = wallet.latest_checkpoint().height();
+    eprintln!(
+        "[wallet] sync: {} blocks ({} -> {}), {} mempool txs, {:.1}ms",
+        blocks_synced, start_height, final_height, mempool_count, elapsed.as_secs_f64() * 1000.0
+    );
 
     Ok(())
 }
@@ -228,9 +261,15 @@ fn sync_wallet(wallet: &mut Wallet, rpc: &Client) -> Result<(), String> {
 fn save_checkpoint(state_path: &str, wallet: &Wallet) -> Result<(), String> {
     let mut state = load_state(state_path)?;
     let cp = wallet.latest_checkpoint();
+    let old_height = state.checkpoint_height.unwrap_or(0);
     state.checkpoint_height = Some(cp.height());
     state.checkpoint_hash = Some(cp.hash().to_string());
-    save_state(state_path, &state)
+    save_state(state_path, &state)?;
+    eprintln!(
+        "[wallet] {} checkpoint saved: {} -> {} ({})",
+        state.wallet_name, old_height, cp.height(), &cp.hash().to_string()[..12]
+    );
+    Ok(())
 }
 
 // ── Handlers ──
@@ -239,8 +278,11 @@ fn handle_create_wallet(params: serde_json::Value) -> Result<serde_json::Value, 
     let p: CreateWalletParams =
         serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
 
+    eprintln!("[wallet] create-wallet '{}' at {}", p.name, p.state_path);
+
     // Idempotent: if wallet state already exists, return it
     if let Ok(state) = load_state(&p.state_path) {
+        eprintln!("[wallet] '{}' already exists (addr: {})", state.wallet_name, state.address);
         return Ok(json!({
             "address": state.address,
             "mnemonic": state.mnemonic,
@@ -292,8 +334,10 @@ fn handle_create_wallet(params: serde_json::Value) -> Result<serde_json::Value, 
         network: "regtest".to_string(),
         checkpoint_height: None,
         checkpoint_hash: None,
+        cached_balance: None,
     };
     save_state(&p.state_path, &state)?;
+    eprintln!("[wallet] '{}' created (addr: {})", p.name, address);
 
     Ok(json!({
         "address": address,
@@ -306,24 +350,42 @@ fn handle_get_balance(params: serde_json::Value) -> Result<serde_json::Value, St
     let p: GetBalanceParams =
         serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
     let state = load_state(&p.state_path)?;
+    eprintln!("[wallet] get-balance for '{}' (addr: {})", state.wallet_name, state.address);
 
     let rpc_url = p.rpc_url.unwrap_or_else(default_url);
     let rpc_user = p.rpc_user.unwrap_or_else(default_user);
     let rpc_pass = p.rpc_pass.unwrap_or_else(default_pass);
     let rpc = rpc_client(&rpc_url, &rpc_user, &rpc_pass)?;
 
+    let cp_height = state.checkpoint_height.unwrap_or(0);
+    eprintln!("[wallet] {} syncing from checkpoint height {}", state.wallet_name, cp_height);
+
     let mut wallet = recreate_wallet(&state)?;
     sync_wallet(&mut wallet, &rpc)?;
-    let _ = save_checkpoint(&p.state_path, &wallet);
 
     let balance = wallet.balance();
     let confirmed = balance.confirmed.to_sat();
     let unconfirmed = balance.untrusted_pending.to_sat() + balance.trusted_pending.to_sat();
+    let immature = balance.immature.to_sat();
+    let total = confirmed + unconfirmed;
+
+    eprintln!(
+        "[wallet] {} balance: {} confirmed, {} unconfirmed, {} immature (synced to height {})",
+        state.wallet_name, confirmed, unconfirmed, immature, wallet.latest_checkpoint().height()
+    );
+
+    // Save checkpoint and cached balance
+    let mut state = load_state(&p.state_path)?;
+    let cp = wallet.latest_checkpoint();
+    state.checkpoint_height = Some(cp.height());
+    state.checkpoint_hash = Some(cp.hash().to_string());
+    state.cached_balance = Some(CachedBalance { confirmed, unconfirmed, total });
+    let _ = save_state(&p.state_path, &state);
 
     Ok(json!({
         "confirmed": confirmed,
         "unconfirmed": unconfirmed,
-        "total": confirmed + unconfirmed,
+        "total": total,
     }))
 }
 
@@ -348,6 +410,10 @@ fn handle_send(params: serde_json::Value) -> Result<serde_json::Value, String> {
     let p: SendParams =
         serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
     let state = load_state(&p.state_path)?;
+    eprintln!(
+        "[wallet] send from '{}': {} sats -> {}",
+        state.wallet_name, p.amount_sats, &p.to_address[..20]
+    );
 
     let rpc_url = p.rpc_url.unwrap_or_else(default_url);
     let rpc_user = p.rpc_user.unwrap_or_else(default_user);
@@ -357,6 +423,15 @@ fn handle_send(params: serde_json::Value) -> Result<serde_json::Value, String> {
     let mut wallet = recreate_wallet(&state)?;
     sync_wallet(&mut wallet, &rpc)?;
     let _ = save_checkpoint(&p.state_path, &wallet);
+
+    let balance = wallet.balance();
+    eprintln!(
+        "[wallet] {} pre-send balance: {} confirmed, {} pending, {} immature",
+        state.wallet_name,
+        balance.confirmed.to_sat(),
+        balance.trusted_pending.to_sat() + balance.untrusted_pending.to_sat(),
+        balance.immature.to_sat()
+    );
 
     let to_addr = Address::from_str(&p.to_address)
         .map_err(|e| format!("invalid address: {e}"))?
@@ -369,6 +444,34 @@ fn handle_send(params: serde_json::Value) -> Result<serde_json::Value, String> {
         .fee_rate(FeeRate::from_sat_per_vb(2).expect("valid fee rate"));
 
     let mut psbt = builder.finish().map_err(|e| format!("build tx: {e}"))?;
+
+    // Log transaction details before signing
+    let unsigned_tx = psbt.unsigned_tx.clone();
+    eprintln!(
+        "[wallet] {} built tx: {} input(s), {} output(s), {} vbytes",
+        state.wallet_name,
+        unsigned_tx.input.len(),
+        unsigned_tx.output.len(),
+        unsigned_tx.vsize()
+    );
+    for (i, input) in unsigned_tx.input.iter().enumerate() {
+        eprintln!(
+            "[wallet]   vin[{}]: {}:{} (sequence: {})",
+            i, input.previous_output.txid, input.previous_output.vout, input.sequence
+        );
+    }
+    for (i, output) in unsigned_tx.output.iter().enumerate() {
+        let addr_label = if output.value.to_sat() == p.amount_sats {
+            "recipient"
+        } else {
+            "change"
+        };
+        eprintln!(
+            "[wallet]   vout[{}]: {} sats ({})",
+            i, output.value.to_sat(), addr_label
+        );
+    }
+
     #[allow(deprecated)]
     let finalized = wallet
         .sign(&mut psbt, SignOptions::default())
@@ -376,12 +479,40 @@ fn handle_send(params: serde_json::Value) -> Result<serde_json::Value, String> {
     if !finalized {
         return Err("transaction signing incomplete".into());
     }
+    eprintln!("[wallet] {} tx signed successfully", state.wallet_name);
 
     let tx = psbt.extract_tx().map_err(|e| format!("extract tx: {e}"))?;
     let txid = tx.compute_txid();
+    let fee = wallet.calculate_fee(&tx).unwrap_or(Amount::ZERO);
+    let fee_rate_vb = if tx.vsize() > 0 {
+        fee.to_sat() as f64 / tx.vsize() as f64
+    } else {
+        0.0
+    };
+
+    eprintln!(
+        "[wallet] {} broadcasting tx {} ({} bytes, {} vbytes, fee: {} sats, {:.1} sat/vB)...",
+        state.wallet_name, txid, tx.total_size(), tx.vsize(), fee.to_sat(), fee_rate_vb
+    );
 
     rpc.send_raw_transaction(&tx)
         .map_err(|e| format!("broadcast: {e}"))?;
+
+    // Verify tx made it into the mempool
+    let mempool_params = vec![json!(txid.to_string()), json!(true)];
+    match rpc.call::<serde_json::Value>("getrawtransaction", &mempool_params) {
+        Ok(raw) => {
+            let confirmations = raw.get("confirmations").and_then(|c| c.as_u64()).unwrap_or(0);
+            if confirmations > 0 {
+                eprintln!("[wallet] {} tx {} already confirmed ({} confirmations)", state.wallet_name, txid, confirmations);
+            } else {
+                eprintln!("[wallet] {} tx {} accepted into mempool", state.wallet_name, txid);
+            }
+        }
+        Err(e) => {
+            eprintln!("[wallet] {} WARNING: tx {} mempool check failed: {}", state.wallet_name, txid, e);
+        }
+    }
 
     Ok(json!({
         "txid": txid.to_string(),
@@ -398,10 +529,22 @@ fn handle_faucet(params: serde_json::Value) -> Result<serde_json::Value, String>
     let rpc = rpc_client(&rpc_url, &rpc_user, &rpc_pass)?;
 
     let blocks = p.blocks.unwrap_or(1);
+    eprintln!(
+        "[wallet] faucet: mining {} block(s) to {}...{}",
+        blocks,
+        &p.address[..20],
+        &p.address[p.address.len().saturating_sub(6)..]
+    );
 
     let block_hashes: Vec<String> = rpc
         .call("generatetoaddress", &[json!(blocks), json!(p.address)])
         .map_err(|e| format!("generatetoaddress: {e}"))?;
+
+    // Log current chain height
+    let empty: Vec<serde_json::Value> = vec![];
+    if let Ok(height) = rpc.call::<u64>("getblockcount", &empty) {
+        eprintln!("[wallet] faucet: chain height now {}", height);
+    }
 
     Ok(json!({
         "blocks_mined": blocks,
@@ -482,12 +625,80 @@ fn handle_get_tx_history(params: serde_json::Value) -> Result<serde_json::Value,
     }))
 }
 
+fn handle_get_balance_fast(params: serde_json::Value) -> Result<serde_json::Value, String> {
+    let p: GetBalanceParams =
+        serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
+    let state = load_state(&p.state_path)?;
+    eprintln!("[wallet] get-balance-fast for '{}' (scantxoutset)", state.wallet_name);
+
+    let rpc_url = p.rpc_url.unwrap_or_else(default_url);
+    let rpc_user = p.rpc_user.unwrap_or_else(default_user);
+    let rpc_pass = p.rpc_pass.unwrap_or_else(default_pass);
+    let rpc = rpc_client(&rpc_url, &rpc_user, &rpc_pass)?;
+
+    // Use scantxoutset to query the UTXO set directly — no BDK sync needed.
+    // Recreate the wallet to derive all addresses (external + change) then
+    // scan each one. This avoids descriptor format mismatches between BDK
+    // and Bitcoin Core.
+    let wallet = recreate_wallet(&state)?;
+
+    let mut descriptors: Vec<serde_json::Value> = Vec::new();
+    // Scan external addresses (0..=address_index + some lookahead)
+    let ext_count = state.address_index.max(5) + 5;
+    for i in 0..ext_count {
+        let info = wallet.peek_address(KeychainKind::External, i);
+        descriptors.push(json!(format!("addr({})", info.address)));
+    }
+    // Scan change addresses (small lookahead)
+    for i in 0..20 {
+        let info = wallet.peek_address(KeychainKind::Internal, i);
+        descriptors.push(json!(format!("addr({})", info.address)));
+    }
+    eprintln!("[wallet] {} scanning {} addresses via scantxoutset", state.wallet_name, descriptors.len());
+
+    let scan_result: serde_json::Value = rpc
+        .call("scantxoutset", &[json!("start"), json!(descriptors)])
+        .map_err(|e| format!("scantxoutset: {e}"))?;
+
+    let total_sats = scan_result["total_amount"]
+        .as_f64()
+        .map(|btc| (btc * 100_000_000.0).round() as u64)
+        .unwrap_or(0);
+
+    let unspents = scan_result["unspents"].as_array();
+    let utxo_count = unspents.map(|a| a.len()).unwrap_or(0);
+    eprintln!(
+        "[wallet] {} scantxoutset result: {} sats across {} UTXOs",
+        state.wallet_name, total_sats, utxo_count
+    );
+    if let Some(utxos) = unspents {
+        for u in utxos {
+            let amt = u["amount"].as_f64().unwrap_or(0.0);
+            let sats = (amt * 100_000_000.0).round() as u64;
+            let txid = u["txid"].as_str().unwrap_or("?");
+            let vout = u["vout"].as_u64().unwrap_or(0);
+            let addr = u["desc"].as_str().unwrap_or("?");
+            eprintln!("[wallet]   UTXO {}:{} -> {} sats ({})", &txid[..12], vout, sats, addr);
+        }
+    }
+
+    Ok(json!({
+        "confirmed": total_sats,
+        "unconfirmed": 0,
+        "total": total_sats,
+    }))
+}
+
 // ── Command dispatch ──
 
 fn dispatch(cmd: Command) -> Result<serde_json::Value, String> {
-    match cmd.command.as_str() {
+    let cmd_name = cmd.command.clone();
+    let start = std::time::Instant::now();
+    eprintln!("[wallet] ── {} ──", cmd_name);
+    let result = match cmd.command.as_str() {
         "create-wallet" => handle_create_wallet(cmd.params),
         "get-balance" => handle_get_balance(cmd.params),
+        "get-balance-fast" => handle_get_balance_fast(cmd.params),
         "get-address" => handle_get_address(cmd.params),
         "send" => handle_send(cmd.params),
         "faucet" => handle_faucet(cmd.params),
@@ -495,7 +706,13 @@ fn dispatch(cmd: Command) -> Result<serde_json::Value, String> {
         "get-tx-history" => handle_get_tx_history(cmd.params),
         "ping" => Ok(json!({"status": "ok"})),
         other => Err(format!("unknown command: {other}")),
+    };
+    let elapsed = start.elapsed();
+    match &result {
+        Ok(_) => eprintln!("[wallet] ── {} OK ({:.1}ms) ──", cmd_name, elapsed.as_secs_f64() * 1000.0),
+        Err(e) => eprintln!("[wallet] ── {} FAILED ({:.1}ms): {} ──", cmd_name, elapsed.as_secs_f64() * 1000.0, e),
     }
+    result
 }
 
 // ── Main ──
@@ -508,6 +725,7 @@ fn main() {
     let daemon = std::env::args().any(|a| a == "--daemon");
 
     if daemon {
+        eprintln!("[wallet] daemon started (pid: {})", std::process::id());
         let stdin = std::io::stdin();
         let reader = stdin.lock();
         for line in reader.lines() {

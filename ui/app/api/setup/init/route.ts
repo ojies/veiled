@@ -13,9 +13,11 @@ import {
 } from "@/lib/state";
 import { createWallet, walletExists } from "@/lib/wallet";
 import { BENEFICIARY_CAPACITY, MIN_MERCHANTS } from "@/lib/config";
+import { log, logError } from "@/lib/log";
 
 export async function POST() {
   try {
+    log("setup/init", "called");
     const state = getState();
     const registry = getRegistryClient();
 
@@ -58,12 +60,14 @@ export async function POST() {
     }));
 
     if (merchants.length < MIN_MERCHANTS) {
+      log("setup/init", `waiting: ${merchants.length}/${MIN_MERCHANTS} merchants`);
       return NextResponse.json({
         error: `Need at least ${MIN_MERCHANTS} merchant(s) registered. Currently: ${merchants.length}.`,
         waiting: true,
       });
     }
 
+    log("setup/init", `${merchants.length} merchants found: ${merchants.map((m: any) => m.name).join(", ")}`);
     setMerchants(merchants);
 
     // Create anonymity set with all registered merchants (idempotent — ignore "already exists")
@@ -95,6 +99,7 @@ export async function POST() {
       capacity: BENEFICIARY_CAPACITY,
     });
     setPhase(0);
+    log("setup/init", `initialized: set_id=${state.set_id}, CRS=${crsHex.length} hex chars, capacity=${BENEFICIARY_CAPACITY}`);
 
     return NextResponse.json({
       merchants,
@@ -105,6 +110,7 @@ export async function POST() {
       fees,
     });
   } catch (err: any) {
+    logError("setup/init", "failed", err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

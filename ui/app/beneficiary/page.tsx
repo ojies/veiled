@@ -7,6 +7,7 @@ import WalletCard from "@/components/WalletCard";
 import HexDisplay from "@/components/HexDisplay";
 import { useToast } from "@/components/ToastProvider";
 import { useSessionState } from "@/lib/useLocalState";
+import { BENEFICIARY_NAMES } from "@/lib/demo-participants";
 
 interface Merchant {
   name: string;
@@ -51,7 +52,8 @@ export default function BeneficiaryPage() {
 
   // Persisted state (per-tab via sessionStorage, keyed by tab index)
   const tabKey = tabIndex ? `:${tabIndex}` : "";
-  const [name, setName] = useSessionState(`ben:name${tabKey}`, tabIndex ? `Beneficiary ${tabIndex}` : "");
+  const defaultBenName = tabIndex ? (BENEFICIARY_NAMES[Number(tabIndex)] ?? "") : "";
+  const [name, setName] = useSessionState(`ben:name${tabKey}`, defaultBenName);
   const [phi, setPhi] = useSessionState<string | null>(`ben:phi${tabKey}`, null);
   const [regIndex, setRegIndex] = useSessionState<number | null>(`ben:regIndex${tabKey}`, null);
   const [setStatus, setSetStatus] = useSessionState<{ count: number; capacity: number } | null>(`ben:setStatus${tabKey}`, null);
@@ -169,8 +171,16 @@ export default function BeneficiaryPage() {
 
   useEffect(() => {
     if (walletCreated) {
+      refreshBalance();
       const interval = setInterval(refreshBalance, 5000);
-      return () => clearInterval(interval);
+      const onVisible = () => {
+        if (document.visibilityState === "visible") refreshBalance();
+      };
+      document.addEventListener("visibilitychange", onVisible);
+      return () => {
+        clearInterval(interval);
+        document.removeEventListener("visibilitychange", onVisible);
+      };
     }
   }, [walletCreated, refreshBalance]);
 

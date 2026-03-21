@@ -14,7 +14,7 @@ use rusqlite::Connection as SqlConnection;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct MerchantInfo {
     pub merchant: Merchant,
@@ -300,6 +300,7 @@ impl RegistryStore {
         if let Some(rpc) = &self.rpc_client {
             let expected_address = self.wallet_address.to_string();
             let required_fee = self.fee_config.merchant_registration_fee;
+            info!("Verifying merchant '{}' payment: tx {}:{}, expect {} sats to {}", name, outpoint.txid, outpoint.vout, required_fee, &expected_address[..20]);
 
             let raw_tx: serde_json::Value = rpc
                 .call(
@@ -310,6 +311,9 @@ impl RegistryStore {
                     ],
                 )
                 .map_err(|e| format!("Failed to fetch transaction {}: {}", outpoint.txid, e))?;
+
+            let confirmations = raw_tx["confirmations"].as_u64().unwrap_or(0);
+            info!("  tx {} has {} confirmations", outpoint.txid, confirmations);
 
             let vout_array = raw_tx["vout"]
                 .as_array()
@@ -322,6 +326,7 @@ impl RegistryStore {
                 .as_str()
                 .ok_or("Output has no address")?;
             if script_address != expected_address {
+                warn!("  address mismatch: expected {}, got {}", expected_address, script_address);
                 return Err(format!(
                     "Payment output address mismatch: expected {}, got {}",
                     expected_address, script_address
@@ -329,12 +334,17 @@ impl RegistryStore {
             }
 
             let value_sats = btc_value_to_sats(&output["value"])?;
+            info!("  vout[{}]: {} sats to {} (need >= {})", outpoint.vout, value_sats, script_address, required_fee);
             if value_sats < required_fee {
+                warn!("  fee too low: {} < {}", value_sats, required_fee);
                 return Err(format!(
                     "Merchant registration fee too low: expected {} sats, got {} sats",
                     required_fee, value_sats
                 ));
             }
+            info!("  payment verified OK for merchant '{}'", name);
+        } else {
+            info!("  no RPC client — skipping on-chain verification for '{}'", name);
         }
 
         let merchant = Merchant::new(name, origin);
@@ -445,8 +455,8 @@ impl RegistryStore {
         // Verify payment on-chain if RPC client is available
         if let Some(rpc) = &self.rpc_client {
             let expected_address = self.wallet_address.to_string();
+            info!("Verifying beneficiary payment for set {}: tx {}:{}, expect {} sats to {}", set_id, outpoint.txid, outpoint.vout, sats_per_user, &expected_address[..20]);
 
-            // Fetch the transaction from bitcoind
             let raw_tx: serde_json::Value = rpc
                 .call(
                     "getrawtransaction",
@@ -457,7 +467,9 @@ impl RegistryStore {
                 )
                 .map_err(|e| format!("Failed to fetch transaction {}: {}", outpoint.txid, e))?;
 
-            // Verify the output at the specified vout
+            let confirmations = raw_tx["confirmations"].as_u64().unwrap_or(0);
+            info!("  tx {} has {} confirmations", outpoint.txid, confirmations);
+
             let vout_array = raw_tx["vout"]
                 .as_array()
                 .ok_or("Transaction has no vout array")?;
@@ -465,25 +477,29 @@ impl RegistryStore {
                 .get(outpoint.vout as usize)
                 .ok_or(format!("vout index {} not found in tx", outpoint.vout))?;
 
-            // Check the address matches the registry wallet's P2TR address
             let script_address = output["scriptPubKey"]["address"]
                 .as_str()
                 .ok_or("Output has no address")?;
             if script_address != expected_address {
+                warn!("  address mismatch: expected {}, got {}", expected_address, script_address);
                 return Err(format!(
                     "Payment output address mismatch: expected {}, got {}",
                     expected_address, script_address
                 ));
             }
 
-            // Check the amount
             let value_sats = btc_value_to_sats(&output["value"])?;
+            info!("  vout[{}]: {} sats to {} (need >= {})", outpoint.vout, value_sats, script_address, sats_per_user);
             if value_sats < sats_per_user {
+                warn!("  payment too low: {} < {}", value_sats, sats_per_user);
                 return Err(format!(
                     "Payment amount too low: expected {} sats, got {} sats",
                     sats_per_user, value_sats
                 ));
             }
+            info!("  payment verified OK for beneficiary in set {}", set_id);
+        } else {
+            info!("  no RPC client — skipping on-chain verification for set {}", set_id);
         }
 
         let index = active_set.registry.add_beneficiary(phi, outpoint);
@@ -519,6 +535,7 @@ impl RegistryStore {
         }
 
         // Create Taproot commitment to get the output script (Merkle root of anonymity set).
+        info!("Creating Taproot commitment for set {} ({} members)", set_id, active_set.registry.beneficiary_count());
         let dummy_outpoint = OutPoint::null();
         let commitment = active_set
             .registry
@@ -528,6 +545,7 @@ impl RegistryStore {
         // The commitment output amount is the total beneficiary fees for this set.
         let output_amount = active_set.beneficiary_capacity as u64 * active_set.sats_per_user;
         let output_script = commitment.tx.output[0].script_pubkey.clone();
+        info!("Commitment output: {} sats, script {} bytes", output_amount, output_script.len());
 
         // Fund, sign, and broadcast using BDK wallet
         let commitment_txid_str = if let Some(rpc) = &self.rpc_client {
@@ -536,9 +554,17 @@ impl RegistryStore {
                 .parse()
                 .map_err(|e| format!("parse mnemonic: {e}"))?;
             let mut bdk = create_bdk_wallet(&mnemonic)?;
+            info!("Syncing registry BDK wallet for commitment tx...");
             sync_bdk_wallet(&mut bdk, rpc)?;
 
-            // Convert the commitment output script to bdk_wallet::bitcoin types
+            let balance = bdk.balance();
+            info!(
+                "Registry wallet balance: {} confirmed, {} pending, {} immature",
+                balance.confirmed.to_sat(),
+                balance.trusted_pending.to_sat() + balance.untrusted_pending.to_sat(),
+                balance.immature.to_sat()
+            );
+
             let bdk_script =
                 bdk_wallet::bitcoin::ScriptBuf::from_bytes(output_script.to_bytes());
             let bdk_amount = bdk_wallet::bitcoin::Amount::from_sat(output_amount);
@@ -564,13 +590,21 @@ impl RegistryStore {
                 .extract_tx()
                 .map_err(|e| format!("Failed to extract commitment tx: {e}"))?;
             let txid = tx.compute_txid();
+            let fee = bdk.calculate_fee(&tx).unwrap_or(bdk_wallet::bitcoin::Amount::ZERO);
 
+            info!(
+                "Broadcasting commitment tx: {} ({} vbytes, fee: {} sats)",
+                txid,
+                tx.vsize(),
+                fee.to_sat()
+            );
             rpc.send_raw_transaction(&tx)
                 .map_err(|e| format!("Failed to broadcast commitment tx: {e}"))?;
 
-            info!("Broadcast commitment tx: {}", txid);
+            info!("Commitment tx broadcast OK: {}", txid);
             Some(txid.to_string())
         } else {
+            info!("No RPC client — skipping on-chain commitment for set {}", set_id);
             None
         };
 

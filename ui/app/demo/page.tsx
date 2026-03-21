@@ -20,7 +20,8 @@ function FundByAddress() {
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      toast(`Funded ${address.trim().slice(0, 12)}... with ${data.blocks_mined} block(s)`, "success");
+      const amt = data.amount_sats ? `${(data.amount_sats / 100_000_000).toFixed(2)} BTC` : "funds";
+      toast(`Sent ${amt} to ${address.trim().slice(0, 12)}...`, "success");
       setAddress("");
     } catch (e: any) {
       toast(e.message || "Funding failed", "error");

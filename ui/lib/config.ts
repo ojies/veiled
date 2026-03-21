@@ -24,3 +24,10 @@ export const MERCHANT_STARTUP_DELAY = intEnv("MERCHANT_STARTUP_DELAY", 1500);
 
 /** Number of blocks mined to mature coinbase outputs */
 export const MATURITY_BLOCKS = intEnv("MATURITY_BLOCKS", 100);
+
+/** Amount in sats sent per faucet call (default 1 BTC) */
+export const FAUCET_AMOUNT_SATS = intEnv("FAUCET_AMOUNT_SATS", 100_000_000);
+
+// ── Demo participant names (matches simulation.rs) ──
+// Re-exported from demo-participants.ts for client components.
+export { MERCHANT_NAMES, BENEFICIARY_NAMES } from "./demo-participants";
