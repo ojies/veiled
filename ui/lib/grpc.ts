@@ -56,8 +56,15 @@ export function grpcCall<T>(
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     client[method](request, (err: any, response: T) => {
-      if (err) reject(err);
-      else resolve(response);
+      if (err) {
+        const msg = err.message || String(err);
+        if (msg.includes("ECONNREFUSED") || msg.includes("UNAVAILABLE") || msg.includes("connect")) {
+          console.error(`[grpc] ${method} ECONNREFUSED/UNAVAILABLE: ${msg}`);
+        }
+        reject(err);
+      } else {
+        resolve(response);
+      }
     });
   });
 }

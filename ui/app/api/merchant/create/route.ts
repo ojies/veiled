@@ -59,15 +59,10 @@ export async function POST(request: Request) {
     const walletName = `merchant-${name.toLowerCase().replace(/\s+/g, "-")}`;
     const wallet = await createWallet(walletName);
 
-    // Fund merchant wallet from the miner (no coinbase to merchant — avoids
-    // balance inflation from maturing coinbase rewards).
+    // Confirmation miner (for mining blocks after sends)
     const dummyWallet = await createWallet("faucet-miner");
-    const fundAmount = merchantFee * 3; // enough for fee + tx fees
-    log("merchant/create", `funding ${walletName} with ${fundAmount} sats from miner`);
-    await send("miner", wallet.address, fundAmount);
-    await faucet(dummyWallet.address, 1); // confirm the send
 
-    // Pay merchant registration fee to registry
+    // Pay merchant registration fee to registry (wallet must be funded by the user first)
     log("merchant/create", `paying ${merchantFee} sats to registry ${registryAddress.slice(0, 20)}...`);
     const sendResult = await send(walletName, registryAddress, merchantFee);
     const fundingTxid = sendResult.txid;

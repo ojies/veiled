@@ -52,11 +52,8 @@ export async function POST() {
     const walletName = `merchant-${SEED_NAME.toLowerCase()}`;
     const wallet = await createWallet(walletName);
 
-    // Fund merchant from miner (no coinbase to merchant — avoids balance inflation)
+    // Confirmation miner
     const dummyWallet = await createWallet("faucet-miner");
-    const fundAmount = merchantFee * 3;
-    await send("miner", wallet.address, fundAmount);
-    await faucet(dummyWallet.address, 1); // confirm
 
     // Pay merchant registration fee
     const sendResult = await send(walletName, registryAddress, merchantFee);

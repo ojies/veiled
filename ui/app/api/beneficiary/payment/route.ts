@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getMerchantClient, grpcCall } from "@/lib/grpc";
 import { createPaymentRequest } from "@/lib/core";
 import { getState, getBeneficiary, updateBeneficiary, setPhase } from "@/lib/state";
+import { log, logError } from "@/lib/log";
 
 function getMerchantAddr(name: string): string | null {
   const state = getState();
@@ -50,7 +51,9 @@ export async function POST(request: Request) {
 
     // Submit to merchant
     const merchantAddr = getMerchantAddr(merchant);
+    log("payment", `connecting to merchant '${merchant}' at ${merchantAddr}, amount=${amount}`);
     if (!merchantAddr) {
+      logError("payment", `no running merchant server for '${merchant}'`);
       return NextResponse.json(
         { error: `no running merchant server for '${merchant}'` },
         { status: 400 }
@@ -84,6 +87,12 @@ export async function POST(request: Request) {
       friendly_name: resp.friendly_name,
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    const msg = err.message || String(err);
+    if (msg.includes("ECONNREFUSED") || msg.includes("UNAVAILABLE")) {
+      logError("payment", `merchant gRPC connection failed — is the merchant process running?`, err);
+    } else {
+      logError("payment", "failed", err);
+    }
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

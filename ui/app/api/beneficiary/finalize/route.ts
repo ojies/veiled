@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getRegistryClient, grpcCall } from "@/lib/grpc";
 import { getState, setAnonymitySet, setPhase } from "@/lib/state";
 import { faucet, createWallet } from "@/lib/wallet";
+import { log, logError } from "@/lib/log";
 
 export async function POST() {
   try {
@@ -12,11 +13,14 @@ export async function POST() {
     const registry = getRegistryClient();
 
     // Finalize — the registry self-funds, signs, and broadcasts the commitment tx
+    log("ben/finalize", `finalizing set ${state.set_id}`);
     await grpcCall(registry, "FinalizeSet", { set_id: state.set_id });
+    log("ben/finalize", `FinalizeSet OK`);
 
     // Mine a block to confirm the broadcast commitment transaction
     const confirmMiner = await createWallet("faucet-miner");
     await faucet(confirmMiner.address, 1);
+    log("ben/finalize", `mined 1 confirmation block`);
 
     // Fetch updated anonymity set
     const updatedSet: any = await grpcCall(registry, "GetAnonymitySet", {
@@ -25,6 +29,7 @@ export async function POST() {
     const commitments = (updatedSet.commitments || []).map((c: Buffer) =>
       Buffer.from(c).toString("hex")
     );
+    log("ben/finalize", `set ${state.set_id}: ${updatedSet.count} members, ${commitments.length} commitments (padded), finalized=${updatedSet.finalized}`);
 
     setAnonymitySet({
       commitments,
@@ -42,6 +47,14 @@ export async function POST() {
       capacity: updatedSet.capacity,
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    const msg = err.message || String(err);
+    if (msg.includes("already")) {
+      log("ben/finalize", `set already finalized`);
+    } else if (msg.includes("ECONNREFUSED") || msg.includes("UNAVAILABLE")) {
+      logError("ben/finalize", `registry connection failed`, err);
+    } else {
+      logError("ben/finalize", "failed", err);
+    }
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
