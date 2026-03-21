@@ -61,15 +61,31 @@ export default function MerchantPage() {
 
   const activeStep = !walletCreated ? 0 : !registered ? 1 : 2;
 
-  // Fetch fees from registry on mount
-  useEffect(() => {
+  // Call setup/init on mount and after registration to fetch fees and
+  // trigger merchant gRPC server spawning once the set is created.
+  const callInit = useCallback(() => {
     fetch("/api/setup/init", { method: "POST" })
       .then((r) => r.json())
       .then((data) => {
         if (data.fees) setFees(data.fees);
+        // If init succeeded and our server is pending, it may now be spawned
+        if (data.already_initialized && registered && serverStatus === "pending") {
+          setServerStatus("starting");
+        }
       })
       .catch(() => {});
-  }, []);
+  }, [registered, serverStatus]);
+
+  useEffect(() => {
+    callInit();
+  }, [callInit]);
+
+  // Poll init while server is pending (triggers spawn once set is created)
+  useEffect(() => {
+    if (!registered || serverStatus !== "pending") return;
+    const interval = setInterval(callInit, 3000);
+    return () => clearInterval(interval);
+  }, [registered, serverStatus, callInit]);
 
   // Create wallet on name entry
   async function createWallet() {
@@ -162,7 +178,11 @@ export default function MerchantPage() {
       setRegistered(true);
       setServerStatus(data.status);
       setServerPort(data.port);
-      toast(`Merchant "${merchantName}" registered and server started`, "success");
+      if (data.status === "pending") {
+        toast(`Merchant "${merchantName}" registered — server will start when beneficiaries connect`, "success");
+      } else {
+        toast(`Merchant "${merchantName}" registered and server started`, "success");
+      }
       await refreshBalance();
     } catch (e: any) {
       const msg = e.message || "Registration failed";
@@ -334,8 +354,8 @@ export default function MerchantPage() {
         </p>
         {registered && (
           <div style={{ marginTop: "0.75rem" }}>
-            <span className="badge badge-success">
-              Server {serverStatus} on port {serverPort}
+            <span className={`badge ${serverStatus === "running" ? "badge-success" : serverStatus === "pending" ? "badge-warning" : "badge-info"}`}>
+              Server {serverStatus === "pending" ? "waiting for set creation" : serverStatus} on port {serverPort}
             </span>
           </div>
         )}

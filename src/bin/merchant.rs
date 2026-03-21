@@ -2,20 +2,23 @@ use clap::Parser;
 use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 use veiled::client;
-use veiled::core::beneficiary::Beneficiary;
 
 #[derive(Parser)]
-#[command(name = "beneficiary", about = "Veiled Beneficiary: creates credential and registers with registry")]
+#[command(name = "merchant", about = "Veiled Merchant: registers with registry and waits for set finalization")]
 struct Args {
-    /// Friendly name for this beneficiary
+    /// Merchant name
     #[arg(short, long)]
     name: String,
+
+    /// Merchant origin URL
+    #[arg(short, long)]
+    origin: String,
 
     /// Registry gRPC server address
     #[arg(short, long, default_value = "http://[::1]:50051")]
     registry_server: String,
 
-    /// Set ID to join (32-byte hex, returned by finalize_set)
+    /// Set ID to subscribe to (32-byte hex)
     #[arg(short, long)]
     set_id: String,
 
@@ -32,7 +35,7 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     fmt()
         .with_env_filter(
-            EnvFilter::from_default_env().add_directive("beneficiary=info".parse().unwrap()),
+            EnvFilter::from_default_env().add_directive("merchant=info".parse().unwrap()),
         )
         .init();
 
@@ -43,29 +46,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if set_id_bytes.len() != 32 {
         return Err("set_id must be 32 bytes (64 hex chars)".into());
     }
-    let set_id_arr: [u8; 32] = set_id_bytes.clone().try_into().unwrap();
 
     // ── Step 1: Connect ──────────────────────────────────────────────────────
     info!("Connecting to registry at {}", args.registry_server);
     let mut client = client::connect(&args.registry_server).await?;
 
     // ── Step 2: Query fees and registry address ──────────────────────────────
-    let (beneficiary_fee, _) = client::get_fees(&mut client).await?;
-    let (registry_address, _) = client::get_registry_address(&mut client, &set_id_bytes).await?;
-    info!("Required fee: {} sats (pay to {})", beneficiary_fee, registry_address);
+    let (_, merchant_fee) = client::get_fees(&mut client).await?;
+    let (registry_address, _) =
+        client::get_registry_address(&mut client, &[0u8; 32]).await?;
+    info!("Required merchant fee: {} sats (pay to {})", merchant_fee, registry_address);
 
-    // ── Step 3: Fetch CRS and create credential ──────────────────────────────
-    let crs = client::get_crs(&mut client, &set_id_bytes).await?;
-    info!("Fetched CRS for set {}", args.set_id);
-
-    let mut beneficiary = Beneficiary::new(&crs, &args.name);
-    info!(
-        "Created credential for '{}', phi: {:?}",
-        args.name,
-        &beneficiary.credential.phi.0[..4]
-    );
-
-    // ── Step 4: Parse funding outpoint ───────────────────────────────────────
+    // ── Step 3: Parse funding outpoint ───────────────────────────────────────
     let funding_txid = match &args.funding_txid {
         Some(hex) => {
             let bytes = hex::decode(hex)
@@ -80,35 +72,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "ERROR: No funding transaction provided.\n\
                  Pay {} sats to {} and re-run with:\n  \
                  --funding-txid <txid_hex> --funding-vout <vout>",
-                beneficiary_fee, registry_address
+                merchant_fee, registry_address
             );
             std::process::exit(1);
         }
     };
 
-    // ── Step 5: Register phi with the registry ───────────────────────────────
-    let index = client::register_beneficiary(
+    // ── Step 4: Register with registry ──────────────────────────────────────
+    let message = client::register_merchant(
         &mut client,
-        beneficiary.credential.phi.0.to_vec(),
         &args.name,
+        &args.origin,
         "",
         "",
         funding_txid,
         args.funding_vout,
     )
     .await?;
-    info!("Registered with registry at index {}", index);
+    info!("Registered with registry: {}", message);
 
-    // ── Step 6: Wait for finalized anonymity set ─────────────────────────────
+    // ── Step 5: Wait for finalized anonymity set ─────────────────────────────
     info!("Subscribing to set {} finalization...", args.set_id);
     let anonymity_set = client::wait_for_finalization(&mut client, &set_id_bytes).await?;
     info!("Set {} finalized: {} members", args.set_id, anonymity_set.len());
 
-    // ── Step 7: Local registration (find own position in the set) ────────────
-    beneficiary.register(set_id_arr, anonymity_set)?;
+    // ── Step 6: Fetch CRS ────────────────────────────────────────────────────
+    let crs = client::get_crs(&mut client, &set_id_bytes).await?;
     info!(
-        "Registered locally at index {}",
-        beneficiary.index.ok_or("beneficiary index not set after registration")?
+        "Merchant '{}' ready: CRS loaded ({} merchants), anonymity set has {} members",
+        args.name,
+        crs.num_merchants(),
+        anonymity_set.len()
     );
 
     Ok(())

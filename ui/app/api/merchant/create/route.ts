@@ -1,23 +1,11 @@
-// POST /api/merchant/create — Spawn a merchant gRPC server + register with registry
+// POST /api/merchant/create — Register merchant with registry, defer gRPC server spawn
 
 import { NextResponse } from "next/server";
-import { spawn } from "child_process";
-import path from "path";
 import { getState, addMerchantProcess } from "@/lib/state";
 import { createWallet, getBalance, send, faucet, getTx } from "@/lib/wallet";
 import { getRegistryClient, grpcCall } from "@/lib/grpc";
-import {
-  MERCHANT_START_PORT,
-  MATURITY_BLOCKS,
-} from "@/lib/config";
+import { MERCHANT_START_PORT } from "@/lib/config";
 import { log, logError } from "@/lib/log";
-
-const MERCHANT_BIN =
-  process.env.MERCHANT_BIN ||
-  path.resolve(process.cwd(), "../target/release/merchant");
-
-const REGISTRY_SERVER =
-  process.env.REGISTRY_SERVER || "http://[::1]:50051";
 
 // Track the next available port
 let nextPort = MERCHANT_START_PORT;
@@ -88,106 +76,27 @@ export async function POST(request: Request) {
       );
     }
 
-    // Find available port
+    // Store spawn params — the merchant binary will be spawned by setup/init
+    // after the anonymity set is created (the binary needs GetCrs which
+    // requires a set to exist).
     const port = nextPort++;
-    const listenAddr = `0.0.0.0:${port}`;
-
-    // Spawn merchant gRPC server
-    log("merchant/create", `spawning merchant binary on port ${port}`, { fundingTxid, fundingVout, setId: state.set_id });
-    const child = spawn(
-      MERCHANT_BIN,
-      [
-        "--name", name,
-        "--origin", origin,
-        "--listen", listenAddr,
-        "--set-id", String(state.set_id),
-        "--registry-server", REGISTRY_SERVER,
-        "--funding-txid", fundingTxid,
-        "--funding-vout", String(fundingVout),
-      ],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: false,
-      }
-    );
-
-    const pid = child.pid || 0;
-
-    // Track the process
     addMerchantProcess(name, {
       name,
       origin,
       port,
-      pid,
-      status: "starting",
+      pid: 0,
+      status: "pending",
+      spawnParams: {
+        fundingTxid,
+        fundingVout,
+      },
     });
+    log("merchant/create", `registered '${name}', port=${port}, spawn deferred until set is created`);
 
-    // Update status when the process starts producing output
-    child.stdout?.on("data", () => {
-      const proc = state.merchant_processes[name];
-      if (proc && proc.status === "starting") {
-        proc.status = "running";
-      }
-    });
-
-    let stderrBuf = "";
-    child.stderr?.on("data", (data: Buffer) => {
-      const msg = data.toString();
-      stderrBuf += msg;
-      log("merchant/create", `[${name} stderr] ${msg.trim()}`);
-      if (msg.includes("listening") || msg.includes("registered")) {
-        const proc = state.merchant_processes[name];
-        if (proc) proc.status = "running";
-      }
-    });
-
-    child.on("exit", (code) => {
-      log("merchant/create", `[${name}] process exited with code ${code}`);
-      const proc = state.merchant_processes[name];
-      if (proc) proc.status = "stopped";
-    });
-
-    // Poll the registry until the merchant appears in GetMerchants (max ~15s)
-    const maxWaitMs = 15_000;
-    const pollIntervalMs = 500;
-    const deadline = Date.now() + maxWaitMs;
-    let confirmed = false;
-
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
-      try {
-        const merchantsResp: any = await grpcCall(registry, "GetMerchants", {});
-        const registered = (merchantsResp.merchants || []).some(
-          (m: any) => m.name === name
-        );
-        if (registered) {
-          confirmed = true;
-          break;
-        }
-      } catch {
-        // registry not ready yet, keep polling
-      }
-
-      // Also bail if the process already exited
-      const proc = state.merchant_processes[name];
-      if (proc?.status === "stopped") {
-        return NextResponse.json(
-          { error: `Merchant process exited before completing registration: ${stderrBuf.trim() || "(no output)"}` },
-          { status: 500 }
-        );
-      }
-    }
-
-    if (!confirmed) {
-      logError("merchant/create", `registration timed out for '${name}'`);
-      return NextResponse.json(
-        { error: "Merchant registration timed out — check registry logs" },
-        { status: 500 }
-      );
-    }
-
+    // The merchant is registered with the registry via the fee payment.
+    // The gRPC server process will be spawned by setup/init once the set is created.
     const balance = await getBalance(walletName);
-    log("merchant/create", `'${name}' registered OK on port ${port}, balance=${balance.total}`);
+    log("merchant/create", `'${name}' registered OK, port=${port}, balance=${balance.total}, server pending`);
 
     return NextResponse.json({
       name,
@@ -195,7 +104,7 @@ export async function POST(request: Request) {
       address: wallet.address,
       wallet_name: walletName,
       balance: balance.total,
-      status: "running",
+      status: "pending",
     });
   } catch (err: any) {
     logError("merchant/create", "failed", err);

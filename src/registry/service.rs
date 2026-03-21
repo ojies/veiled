@@ -1,7 +1,8 @@
+use crate::core::Merchant;
 use crate::core::types::Commitment;
 use crate::registry::pb::registry_server::Registry;
 use crate::registry::pb::{
-    BeneficiaryRequest, BeneficiaryResponse, CreateSetRequest, CreateSetResponse,
+    BeneficiaryRequest, BeneficiaryResponse,
     FinalizeSetRequest, FinalizeSetResponse, GetAnonymitySetRequest, GetAnonymitySetResponse,
     GetCrsRequest, GetCrsResponse, GetFeesRequest, GetFeesResponse, GetMerchantsRequest,
     GetMerchantsResponse, GetRegistryAddressRequest, GetRegistryAddressResponse,
@@ -13,17 +14,64 @@ use bitcoin::{OutPoint, Txid};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_stream::wrappers::ReceiverStream;
+use crate::core::registry::Registry as VieledRegistry;
+
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
+pub struct MerchantInfo {
+    pub merchant: Merchant,
+    pub email: String,
+    pub phone: String,
+}
+
+
+
+/// Configuration for minimum fees enforced by the registry.
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// Minimum sats-per-user required when creating a set.
+    pub min_sats_per_user: u64,
+    /// Minimum merchant registration fee in sats (future use).
+    pub merchant_registration_fee: u64,
+
+    pub beneficiary_capacity: usize,
+
+    pub merchant_capacity: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            min_sats_per_user: 1000,
+            merchant_registration_fee: 3000,
+            beneficiary_capacity: 4,
+            merchant_capacity: 2,
+        }
+    }
+}
+
 pub struct RegistryService {
     pub store: Arc<Mutex<RegistryStore>>,
+    pub registery_data: Arc<Mutex<VieledRegistry>>,
+    pub config: Config,
+    pub state: RegistryState,
+}
+
+pub enum RegistryState {
+    Empty,
+    Pending,
+    Finalizing,
 }
 
 impl RegistryService {
-    pub fn new(store: Arc<Mutex<RegistryStore>>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<Mutex<RegistryStore>>, config: Config) -> Self {
+        let new_registry = VieledRegistry::new(config.beneficiary_capacity, config.min_sats_per_user);
+        let registery_data = Arc::new(Mutex::new(new_registry));
+        let state = RegistryState::Empty;
+        Self { store, registery_data, config, state }
     }
+
 }
 
 #[tonic::async_trait]
@@ -50,57 +98,23 @@ impl Registry for RegistryService {
             txid,
             vout: req.funding_vout,
         };
-
+        let merchant = Merchant::new(&req.name, &req.origin);
+        let id = self.registery_data.lock().await.add_merchant(merchant);
         let mut store = self.store.lock().await;
         store
-            .register_merchant(&req.name, &req.origin, req.email, req.phone, outpoint)
+            .add_merchant(&req.name, &req.origin, req.email, req.phone, outpoint, id, self.config.merchant_registration_fee)
             .map_err(|e| {
                 warn!("register_merchant FAILED for '{}': {}", req.name, e);
                 Status::already_exists(e)
             })?;
-        let merchant_names: Vec<&str> = store.merchant_pool.keys().map(|k| k.as_str()).collect();
+
+        let merchant_names: Vec<String> = store.merchant_pool.keys().cloned().collect();
         info!("register_merchant OK: '{}' (total merchants: {} [{}])", req.name, store.merchant_pool.len(), merchant_names.join(", "));
         Ok(Response::new(MerchantResponse {
             message: format!("Merchant '{}' registered", req.name),
         }))
     }
 
-    async fn create_set(
-        &self,
-        request: Request<CreateSetRequest>,
-    ) -> Result<Response<CreateSetResponse>, Status> {
-        let req = request.into_inner();
-        info!(
-            "create_set: id={}, merchants=[{}], capacity={}, sats_per_user={}",
-            req.set_id,
-            req.merchant_names.join(", "),
-            req.beneficiary_capacity,
-            req.sats_per_user
-        );
-        let mut store = self.store.lock().await;
-        store
-            .create_set(
-                req.set_id,
-                &req.merchant_names,
-                req.beneficiary_capacity as usize,
-                req.sats_per_user,
-            )
-            .map_err(|e| {
-                warn!("create_set FAILED for set {}: {}", req.set_id, e);
-                Status::invalid_argument(e)
-            })?;
-        info!(
-            "create_set OK: set {} created (merchants: {}, beneficiary capacity: {}, fee: {} sats/user, total sets: {})",
-            req.set_id,
-            req.merchant_names.len(),
-            req.beneficiary_capacity,
-            req.sats_per_user,
-            store.active_sets.len()
-        );
-        Ok(Response::new(CreateSetResponse {
-            message: format!("Set {} created", req.set_id),
-        }))
-    }
 
     async fn register_beneficiary(
         &self,
@@ -108,13 +122,13 @@ impl Registry for RegistryService {
     ) -> Result<Response<BeneficiaryResponse>, Status> {
         let req = request.into_inner();
         info!(
-            "register_beneficiary: set={}, name='{}', phi={}..., funding={}:{}",
-            req.set_id,
+            "register_beneficiary: name='{}', phi={}..., funding={}:{}",
             req.name,
             hex::encode(&req.phi[..8.min(req.phi.len())]),
             hex::encode(&req.funding_txid),
             req.funding_vout
         );
+
         let phi_bytes: [u8; 33] = req
             .phi
             .try_into()
@@ -129,24 +143,32 @@ impl Registry for RegistryService {
             txid_bytes.reverse();
             Txid::from_byte_array(txid_bytes)
         };
-
         let outpoint = OutPoint {
             txid,
             vout: req.funding_vout,
         };
 
-        let mut store = self.store.lock().await;
-        let index = store
-            .register_beneficiary(req.set_id, phi, outpoint)
-            .map_err(|e| {
-                warn!("register_beneficiary FAILED for set {}: {}", req.set_id, e);
-                Status::invalid_argument(e)
-            })?;
+        // Verify payment and add beneficiary to the pending registry
+        let store = self.store.lock().await;
+        store
+            .verify_payment(&outpoint, self.config.min_sats_per_user)
+            .map_err(|e| Status::failed_precondition(e))?;
+        drop(store);
 
-        let count = store.active_sets.get(&req.set_id).map(|s| s.registry.beneficiary_count()).unwrap_or(0);
-        let capacity = store.active_sets.get(&req.set_id).map(|s| s.beneficiary_capacity).unwrap_or(0);
-        info!("register_beneficiary OK: '{}' at index {} (set {}: {}/{})", req.name, index, req.set_id, count, capacity);
+        let mut registry = self.registery_data.lock().await;
+        if registry.beneficiary_count() >= self.config.beneficiary_capacity {
+            return Err(Status::failed_precondition("Anonymity set is full"));
+        }
+        if registry.anonymity_set().contains(&phi) {
+            return Err(Status::already_exists("Beneficiary already registered"));
+        }
+        let index = registry.add_beneficiary(phi, outpoint);
+        let count = registry.beneficiary_count();
 
+        info!(
+            "register_beneficiary OK: '{}' at index {} ({}/{})",
+            req.name, index, count, self.config.beneficiary_capacity
+        );
         Ok(Response::new(BeneficiaryResponse {
             message: "Beneficiary registered".to_string(),
             index: index as u32,
@@ -158,16 +180,28 @@ impl Registry for RegistryService {
         request: Request<FinalizeSetRequest>,
     ) -> Result<Response<FinalizeSetResponse>, Status> {
         let req = request.into_inner();
-        info!("finalize_set: set {}", req.set_id);
+        let set_id: [u8; 32] = req
+            .set_id
+            .try_into()
+            .map_err(|_| Status::invalid_argument("set_id must be 32 bytes"))?;
+        info!("finalize_set: set {}", hex::encode(set_id));
+
+        let mut registry = self.registery_data.lock().await;
         let mut store = self.store.lock().await;
-        let message = store
-            .finalize_set(req.set_id)
+
+        let commitment_txid = store
+            .create_tx(&mut registry, self.config.beneficiary_capacity, self.config.min_sats_per_user)
             .map_err(|e| {
-                warn!("finalize_set FAILED for set {}: {}", req.set_id, e);
-                Status::failed_precondition(e)
+                warn!("finalize_set create_tx FAILED for {}: {}", hex::encode(set_id), e);
+                Status::internal(e)
             })?;
-        info!("finalize_set OK: set {} — {}", req.set_id, message);
-        Ok(Response::new(FinalizeSetResponse { message }))
+
+        let txid_bytes = commitment_txid.to_byte_array().to_vec();
+        info!("finalize_set OK: set {} -> commitment txid {}", hex::encode(set_id), hex::encode(&txid_bytes));
+        Ok(Response::new(FinalizeSetResponse {
+            message: format!("Set {} finalized", hex::encode(set_id)),
+            set_id: txid_bytes,
+        }))
     }
 
     async fn get_merchants(
@@ -193,21 +227,23 @@ impl Registry for RegistryService {
         request: Request<GetCrsRequest>,
     ) -> Result<Response<GetCrsResponse>, Status> {
         let req = request.into_inner();
+        let set_id: [u8; 32] = req
+            .set_id
+            .try_into()
+            .map_err(|_| Status::invalid_argument("set_id must be 32 bytes"))?;
         let store = self.store.lock().await;
-        let registry = store
-            .get_crs(req.set_id)
-            .map_err(|e| {
-                warn!("get_crs FAILED for set {}: {}", req.set_id, e);
-                Status::not_found(e)
-            })?;
+        let registry = store.get_crs(set_id).map_err(|e| {
+            warn!("get_crs FAILED for set {}: {}", hex::encode(set_id), e);
+            Status::not_found(e)
+        })?;
         let crs_bytes = registry.crs.to_bytes();
-        let set_info = store.active_sets.get(&req.set_id);
+        let set_info = store.active_sets.get(&set_id);
         let ben_count = set_info.map(|s| s.registry.beneficiary_count()).unwrap_or(0);
         let ben_cap = set_info.map(|s| s.beneficiary_capacity).unwrap_or(0);
         let merchant_count = registry.crs.num_merchants();
         info!(
             "get_crs: set {} -> {} bytes ({} merchants, {}/{} beneficiaries)",
-            req.set_id, crs_bytes.len(), merchant_count, ben_count, ben_cap
+            hex::encode(set_id), crs_bytes.len(), merchant_count, ben_count, ben_cap
         );
         Ok(Response::new(GetCrsResponse { crs_bytes }))
     }
@@ -217,16 +253,18 @@ impl Registry for RegistryService {
         request: Request<GetAnonymitySetRequest>,
     ) -> Result<Response<GetAnonymitySetResponse>, Status> {
         let req = request.into_inner();
+        let set_id: [u8; 32] = req
+            .set_id
+            .try_into()
+            .map_err(|_| Status::invalid_argument("set_id must be 32 bytes"))?;
         let store = self.store.lock().await;
-        let active_set = store
-            .get_anonymity_set(req.set_id)
-            .map_err(|e| {
-                warn!("get_anonymity_set FAILED for set {}: {}", req.set_id, e);
-                Status::not_found(e)
-            })?;
+        let active_set = store.get_anonymity_set(set_id).map_err(|e| {
+            warn!("get_anonymity_set FAILED for set {}: {}", hex::encode(set_id), e);
+            Status::not_found(e)
+        })?;
         info!(
             "get_anonymity_set: set {} -> {}/{} members, finalized={}",
-            req.set_id,
+            hex::encode(set_id),
             active_set.registry.beneficiary_count(),
             active_set.beneficiary_capacity,
             active_set.finalized
@@ -253,14 +291,19 @@ impl Registry for RegistryService {
         }))
     }
 
+
     async fn get_registry_address(
         &self,
         request: Request<GetRegistryAddressRequest>,
     ) -> Result<Response<GetRegistryAddressResponse>, Status> {
         let req = request.into_inner();
+        let set_id: [u8; 32] = req
+            .set_id
+            .try_into()
+            .map_err(|_| Status::invalid_argument("set_id must be 32 bytes"))?;
         let store = self.store.lock().await;
         let (address, internal_key) = store
-            .get_registry_address(req.set_id)
+            .get_registry_address(set_id)
             .map_err(Status::not_found)?;
         Ok(Response::new(GetRegistryAddressResponse {
             address,
@@ -272,12 +315,10 @@ impl Registry for RegistryService {
         &self,
         _request: Request<GetFeesRequest>,
     ) -> Result<Response<GetFeesResponse>, Status> {
-        let store = self.store.lock().await;
-        let fees = store.get_fees();
-        info!("get_fees: merchant={} sats, beneficiary={} sats", fees.merchant_registration_fee, fees.min_sats_per_user);
+        info!("get_fees: merchant={} sats, beneficiary={} sats", self.config.merchant_registration_fee, self.config.min_sats_per_user);
         Ok(Response::new(GetFeesResponse {
-            beneficiary_fee: fees.min_sats_per_user,
-            merchant_fee: fees.merchant_registration_fee,
+            beneficiary_fee: self.config.min_sats_per_user,
+            merchant_fee: self.config.merchant_registration_fee,
         }))
     }
 
@@ -285,25 +326,30 @@ impl Registry for RegistryService {
         &self,
         request: Request<GetAnonymitySetRequest>,
     ) -> Result<Response<Self::SubscribeSetFinalizationStream>, Status> {
-        let set_id = request.into_inner().set_id;
+        let set_id: [u8; 32] = request
+            .into_inner()
+            .set_id
+            .try_into()
+            .map_err(|_| Status::invalid_argument("set_id must be 32 bytes"))?;
         let store = self.store.clone();
 
-        // Get a watch receiver (briefly lock store)
-        let (already_finalized, mut watch_rx) = {
+        // Wait for the set to exist, then get a watch receiver.
+        // This allows merchants to subscribe before the set is created —
+        // they'll block here until setup/init creates it.
+        let (already_finalized, mut watch_rx) = loop {
             let store_guard = store.lock().await;
-            let set_info = store_guard.active_sets.get(&set_id);
-            let ben_count = set_info.map(|s| s.registry.beneficiary_count()).unwrap_or(0);
-            let ben_cap = set_info.map(|s| s.beneficiary_capacity).unwrap_or(0);
-            let finalized = set_info.map(|s| s.finalized).unwrap_or(false);
-            info!(
-                "subscribe_set_finalization: set {} ({}/{} beneficiaries, finalized={}, total merchants: {})",
-                set_id, ben_count, ben_cap, finalized, store_guard.merchant_pool.len()
-            );
-            let active_set = store_guard
-                .active_sets
-                .get(&set_id)
-                .ok_or_else(|| Status::not_found(format!("Set {} not found", set_id)))?;
-            (active_set.finalized, active_set.finalization_tx.subscribe())
+            if let Some(active_set) = store_guard.active_sets.get(&set_id) {
+                let ben_count = active_set.registry.beneficiary_count();
+                let ben_cap = active_set.beneficiary_capacity;
+                info!(
+                    "subscribe_set_finalization: set {} ({}/{} beneficiaries, finalized={}, total merchants: {})",
+                    hex::encode(set_id), ben_count, ben_cap, active_set.finalized, store_guard.merchant_pool.len()
+                );
+                break (active_set.finalized, active_set.finalization_tx.subscribe());
+            }
+            info!("subscribe_set_finalization: set {} not found, waiting...", hex::encode(set_id));
+            drop(store_guard); // release lock while sleeping
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         };
 
         let (tx, rx) = mpsc::channel(1);

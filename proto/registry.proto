@@ -5,7 +5,6 @@ package registry;
 service Registry {
   // Mutations
   rpc RegisterMerchant (MerchantRequest) returns (MerchantResponse);
-  rpc CreateSet (CreateSetRequest) returns (CreateSetResponse);
   rpc RegisterBeneficiary (BeneficiaryRequest) returns (BeneficiaryResponse);
   rpc FinalizeSet (FinalizeSetRequest) returns (FinalizeSetResponse);
 
@@ -35,25 +34,13 @@ message MerchantResponse {
   string message = 1;
 }
 
-message CreateSetRequest {
-  uint64 set_id = 1;
-  repeated string merchant_names = 2;
-  uint32 beneficiary_capacity = 3;
-  uint64 sats_per_user = 4;
-}
-
-message CreateSetResponse {
-  string message = 1;
-}
-
 message BeneficiaryRequest {
-  uint64 set_id = 1;
-  bytes phi = 2; // 33-byte commitment
-  string name = 3;
-  string email = 4;
-  string phone = 5;
-  bytes funding_txid = 6;  // 32-byte txid of payment tx
-  uint32 funding_vout = 7; // output index within payment tx
+  bytes phi = 1; // 33-byte commitment
+  string name = 2;
+  string email = 3;
+  string phone = 4;
+  bytes funding_txid = 5;  // 32-byte txid of payment tx
+  uint32 funding_vout = 6; // output index within payment tx
 }
 
 message BeneficiaryResponse {
@@ -62,11 +49,12 @@ message BeneficiaryResponse {
 }
 
 message FinalizeSetRequest {
-  uint64 set_id = 1;
+  bytes set_id = 1;  // 32-byte set identifier
 }
 
 message FinalizeSetResponse {
   string message = 1;
+  bytes set_id = 2;  // 32-byte txid of the commitment transaction
 }
 
 // ── Queries ────────────────────────────────────────────────
@@ -84,7 +72,7 @@ message MerchantEntry {
 }
 
 message GetCrsRequest {
-  uint64 set_id = 1;
+  bytes set_id = 1;  // 32-byte set identifier
 }
 
 message GetCrsResponse {
@@ -92,7 +80,7 @@ message GetCrsResponse {
 }
 
 message GetAnonymitySetRequest {
-  uint64 set_id = 1;
+  bytes set_id = 1;  // 32-byte set identifier
 }
 
 message GetAnonymitySetResponse {
@@ -103,7 +91,7 @@ message GetAnonymitySetResponse {
 }
 
 message GetRegistryAddressRequest {
-  uint64 set_id = 1;
+  bytes set_id = 1;  // 32-byte set identifier
 }
 
 message GetRegistryAddressResponse {

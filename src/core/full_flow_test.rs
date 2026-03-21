@@ -42,9 +42,15 @@ fn full_protocol_flow_phases_0_through_5() {
         Merchant::new("merchant_3", "https://merchant_3"),
     ];
 
+    let mut merchant_1_id: usize = 0;
+
     let mut registry = Registry::new(SET_SIZE, SATS_PER_USER);
-    for m in &merchants {
-        registry.add_merchant(m.clone());
+    for (i,m )in merchants.iter().enumerate() {
+        let id = registry.add_merchant(m.clone());
+        if i == 0 {
+            merchant_1_id = id
+        }
+        
     }
     registry.setup();
     assert_eq!(registry.crs.num_merchants(), L);
@@ -119,7 +125,6 @@ fn full_protocol_flow_phases_0_through_5() {
     // Alice registers her payment identity against Merchant 1
     // (merchant_id=1, 1-indexed). Produces (ϕ, nul_l, π, d̂, "alice").
 
-    let merchant_1_id = 1;
     let payment_reg = beneficiaries[0]
         .create_payment_registration(&registry.crs, merchant_1_id)
         .expect("proof generation should succeed");

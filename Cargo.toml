@@ -2,7 +2,7 @@
 name = "veiled"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.87"
+rust-version = "1.85"
 
 [lib]
 name = "veiled"
@@ -18,11 +18,7 @@ path = "src/bin/beneficiary.rs"
 
 [[bin]]
 name = "merchant"
-path = "src/bin/merchant/main.rs"
-
-[[bin]]
-name = "simulation"
-path = "src/bin/simulation.rs"
+path = "src/bin/merchant.rs"
 
 [[bin]]
 name = "veiled-core"

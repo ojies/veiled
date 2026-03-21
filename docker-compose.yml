@@ -59,6 +59,8 @@ services:
       - BITCOIN_RPC_PASS=veiled
       - BENEFICIARY_REGISTRATION_FEE=1000
       - MERCHANT_REGISTRATION_FEE=3000
+      - MIN_MERCHANTS=2
+      - BENEFICIARY_CAPACITY=4
       - WALLETS_DIR=/app/data/wallets
       - REGISTRY_DB_PATH=/app/data/registry.db
       - LISTEN=0.0.0.0:50051

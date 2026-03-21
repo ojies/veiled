@@ -1,5 +1,6 @@
-// POST /api/setup/init — Lazy, idempotent set creation from registered merchants
-// Called by the beneficiary page on mount. Safe to call multiple times.
+// POST /api/setup/init — Fetch system state from the registry.
+// The registry auto-creates sets when enough merchants register.
+// This endpoint just reads the current state and caches it locally.
 
 import { NextResponse } from "next/server";
 import { getRegistryClient, grpcCall } from "@/lib/grpc";
@@ -14,6 +15,7 @@ import {
 import { createWallet, walletExists } from "@/lib/wallet";
 import { BENEFICIARY_CAPACITY, MIN_MERCHANTS } from "@/lib/config";
 import { log, logError } from "@/lib/log";
+import { spawnPendingMerchants } from "@/lib/merchant-spawn";
 
 export async function POST() {
   try {
@@ -36,8 +38,9 @@ export async function POST() {
       merchant: feesResp.merchant_fee || 0,
     };
 
-    // If already initialized, return current state
+    // If already initialized, spawn any pending merchants and return cached state
     if (state.phase >= 0 && state.crs_hex) {
+      spawnPendingMerchants();
       return NextResponse.json({
         merchants: state.merchants,
         crs_hex: state.crs_hex,
@@ -54,9 +57,7 @@ export async function POST() {
     const merchants = (merchantsResp.merchants || []).map((m: any) => ({
       name: m.name,
       origin: m.origin,
-      credential_generator: Buffer.from(m.credential_generator).toString(
-        "hex"
-      ),
+      credential_generator: Buffer.from(m.credential_generator).toString("hex"),
     }));
 
     if (merchants.length < MIN_MERCHANTS) {
@@ -64,51 +65,51 @@ export async function POST() {
       return NextResponse.json({
         error: `Need at least ${MIN_MERCHANTS} merchant(s) registered. Currently: ${merchants.length}.`,
         waiting: true,
+        fees,
       });
     }
 
     log("setup/init", `${merchants.length} merchants found: ${merchants.map((m: any) => m.name).join(", ")}`);
     setMerchants(merchants);
 
-    // Create anonymity set with all registered merchants (idempotent — ignore "already exists")
+    // The registry auto-created the set when enough merchants registered.
+    // Try to fetch the CRS — if it fails, the set hasn't been created yet.
     try {
-      await grpcCall(registry, "CreateSet", {
+      const crsResp: any = await grpcCall(registry, "GetCrs", {
         set_id: state.set_id,
-        merchant_names: merchants.map((m: any) => m.name),
-        beneficiary_capacity: BENEFICIARY_CAPACITY,
-        sats_per_user: fees.beneficiary,
+      });
+      const crsHex = Buffer.from(crsResp.crs_bytes).toString("hex");
+      setCrs(crsHex);
+
+      setAnonymitySet({
+        commitments: [],
+        finalized: false,
+        count: 0,
+        capacity: BENEFICIARY_CAPACITY,
+      });
+      setPhase(0);
+      log("setup/init", `initialized: set_id=${state.set_id}, CRS=${crsHex.length} hex chars`);
+
+      // Spawn any pending merchant gRPC servers
+      spawnPendingMerchants();
+
+      return NextResponse.json({
+        merchants,
+        crs_hex: crsHex,
+        set_id: state.set_id,
+        capacity: BENEFICIARY_CAPACITY,
+        registry_address: state.registry_address,
+        fees,
       });
     } catch (e: any) {
-      // If the set already exists (e.g., server restarted), proceed to fetch CRS
-      if (!e.message?.includes("already exists") && !e.message?.includes("ALREADY_EXISTS")) {
-        throw e;
-      }
+      // Set not created yet by registry — merchants registered but set pending
+      log("setup/init", `merchants registered but set not ready yet: ${e.message}`);
+      return NextResponse.json({
+        error: "Merchants registered but anonymity set not yet created by registry.",
+        waiting: true,
+        fees,
+      });
     }
-
-    // Fetch CRS
-    const crsResp: any = await grpcCall(registry, "GetCrs", {
-      set_id: state.set_id,
-    });
-    const crsHex = Buffer.from(crsResp.crs_bytes).toString("hex");
-    setCrs(crsHex);
-
-    setAnonymitySet({
-      commitments: [],
-      finalized: false,
-      count: 0,
-      capacity: BENEFICIARY_CAPACITY,
-    });
-    setPhase(0);
-    log("setup/init", `initialized: set_id=${state.set_id}, CRS=${crsHex.length} hex chars, capacity=${BENEFICIARY_CAPACITY}`);
-
-    return NextResponse.json({
-      merchants,
-      crs_hex: crsHex,
-      set_id: state.set_id,
-      capacity: BENEFICIARY_CAPACITY,
-      registry_address: state.registry_address,
-      fees,
-    });
   } catch (err: any) {
     logError("setup/init", "failed", err);
     return NextResponse.json({ error: err.message }, { status: 500 });

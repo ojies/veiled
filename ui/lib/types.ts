@@ -56,7 +56,11 @@ export interface MerchantProcess {
   origin: string;
   port: number;
   pid: number;
-  status: "starting" | "running" | "stopped";
+  status: "pending" | "starting" | "running" | "stopped";
+  spawnParams?: {
+    fundingTxid: string;
+    fundingVout: number;
+  };
 }
 
 export interface SimState {

@@ -7,7 +7,9 @@ use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 use veiled::registry::pb::registry_server::RegistryServer;
 use veiled::registry::service::RegistryService;
-use veiled::registry::store::{FeeConfig, RegistryStore};
+use veiled::registry::db;
+use veiled::registry::service::Config;
+use veiled::registry::store::RegistryStore;
 
 #[derive(Parser)]
 #[command(name = "veiled-registry-grpc", about = "Veiled Registry gRPC server")]
@@ -36,6 +38,14 @@ struct Args {
     #[arg(long, env = "MERCHANT_REGISTRATION_FEE", default_value = "3000")]
     merchant_fee: u64,
 
+    /// Minimum merchants required before auto-creating a set
+    #[arg(long, env = "MIN_MERCHANTS", default_value = "2")]
+    min_merchants: usize,
+
+    /// Beneficiary capacity per set (must be <= N from ZK proof)
+    #[arg(long, env = "BENEFICIARY_CAPACITY", default_value = "4")]
+    beneficiary_capacity: usize,
+
     /// SQLite database path for persistent state
     #[arg(long, env = "REGISTRY_DB_PATH", default_value = "registry.db")]
     db_path: String,
@@ -61,21 +71,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Connected to bitcoind at {}", args.rpc_url);
 
-    let fee_config = FeeConfig {
+    let config = Config {
         min_sats_per_user: args.beneficiary_fee,
         merchant_registration_fee: args.merchant_fee,
+        beneficiary_capacity: args.beneficiary_capacity,
+        merchant_capacity: args.min_merchants,
     };
     info!(
-        "Fee config: beneficiary={} sats, merchant={} sats",
-        fee_config.min_sats_per_user, fee_config.merchant_registration_fee
+        "Config: beneficiary_fee={} sats, merchant_fee={} sats, capacity={}, min_merchants={}",
+        config.min_sats_per_user, config.merchant_registration_fee,
+        config.beneficiary_capacity, config.merchant_capacity
     );
 
     info!("Opening database at {}", args.db_path);
-    let store = RegistryStore::open(Some(Arc::new(rpc_client)), fee_config, &args.db_path)
-        .map_err(|e| format!("Failed to initialize store: {e}"))?;
+    let conn = db::open_db(&args.db_path)
+        .map_err(|e| format!("Failed to open database: {e}"))?;
+
+    let store = RegistryStore::new(Some(Arc::new(rpc_client)), Some(conn));
     info!("Wallet address: {}", store.wallet_address);
     let store = Arc::new(Mutex::new(store));
-    let registry_service = RegistryService::new(store);
+    let registry_service = RegistryService::new(store, config);
 
     info!("Veiled gRPC Registry listening on {}", addr);
 

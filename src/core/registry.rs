@@ -109,8 +109,9 @@ impl Registry {
     /// Create the CRS from all collected merchants (Phase 0).
     ///
     /// Calls `Crs::setup(merchants, set_size)` to derive all generators.
-    pub fn setup(&mut self) {
+    pub fn setup(&mut self) -> Self {
         self.crs = Crs::setup(self.merchants.clone(), self.set_size);
+        return self.clone()
     }
 
     /// Add a beneficiary's commitment Φ to the current anonymity set.
