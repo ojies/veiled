@@ -734,6 +734,17 @@ fn handle_get_balance_fast(params: serde_json::Value) -> Result<serde_json::Valu
         }
     }
 
+    // Update cached balance in state file
+    let _ = (|| -> Result<(), String> {
+        let mut s = load_state(&p.state_path)?;
+        s.cached_balance = Some(CachedBalance {
+            confirmed: total_sats,
+            unconfirmed: 0,
+            total: total_sats,
+        });
+        save_state(&p.state_path, &s)
+    })();
+
     Ok(json!({
         "confirmed": total_sats,
         "unconfirmed": 0,
