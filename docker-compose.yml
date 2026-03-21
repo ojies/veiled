@@ -47,6 +47,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: registry
+      args:
+        - VEILED_M=${VEILED_M:-2}
     container_name: veiled-registry
     restart: unless-stopped
     ports:
@@ -73,6 +75,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: registry
+      args:
+        - VEILED_M=${VEILED_M:-2}
     container_name: veiled-chain-init
     entrypoint: ["/bin/bash", "/init.sh"]
     environment:
@@ -94,6 +98,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: ui
+      args:
+        - VEILED_M=${VEILED_M:-2}
     container_name: veiled-ui
     restart: unless-stopped
     ports:

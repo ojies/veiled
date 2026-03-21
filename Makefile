@@ -46,6 +46,11 @@ BTC_RPC_PASS := veiled
 REGISTRY_LISTEN := [::1]:50051
 REGISTRY_DB     := $(DATA_DIR)/registry.db
 
+# ── ZK proof config ──
+# M controls anonymity set size: N = 2^M. Passed to Rust at build time.
+# Override: make build-rust VEILED_M=4  (N=16 beneficiaries max)
+VEILED_M             ?= 2
+
 # ── UI / protocol config ──
 UI_PORT              := 3000
 MIN_MERCHANTS        := 2
@@ -100,13 +105,13 @@ else
 endif
 
 build-rust:
-	@echo "🔨 Building Rust binaries (release)..."
-	cargo build --release \
+	@echo "🔨 Building Rust binaries (release, M=$(VEILED_M))..."
+	VEILED_M=$(VEILED_M) cargo build --release \
 	  --bin veiled-registry-grpc \
 	  --bin merchant \
 	  --bin veiled-core \
 	  --bin veiled-wallet
-	@echo "✅ Rust binaries built"
+	@echo "✅ Rust binaries built (M=$(VEILED_M), N=$$(echo '2^$(VEILED_M)' | bc))"
 
 build-ui:
 	@echo "📦 Installing UI dependencies..."

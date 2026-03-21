@@ -64,6 +64,13 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 clap = { version = "4", features = ["derive", "env"] }
 rand = "0.8"
 
+[features]
+default = ["m2"]
+m2 = []  # N=4  (4 beneficiaries)
+m3 = []  # N=8  (8 beneficiaries, default)
+m4 = []  # N=16 (16 beneficiaries)
+m5 = []  # N=32 (32 beneficiaries)
+
 [build-dependencies]
 tonic-build = "0.12"
 

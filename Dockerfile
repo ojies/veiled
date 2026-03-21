@@ -8,6 +8,9 @@ COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
 COPY proto/ proto/
 
+ARG VEILED_M=2
+ENV VEILED_M=${VEILED_M}
+
 RUN cargo build --release \
     --bin veiled-registry-grpc \
     --bin merchant \

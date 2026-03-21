@@ -8,7 +8,8 @@ import { getState, getBeneficiary, updateBeneficiary, setPhase } from "@/lib/sta
 function getMerchantAddr(name: string): string | null {
   const state = getState();
   const proc = state.merchant_processes[name];
-  if (proc) return `localhost:${proc.port}`;
+  // Use 127.0.0.1 (not localhost) to avoid IPv6 ::1 resolution in Docker
+  if (proc) return `127.0.0.1:${proc.port}`;
   return null;
 }
 

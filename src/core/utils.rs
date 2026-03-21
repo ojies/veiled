@@ -17,8 +17,13 @@ use sha2::{Digest, };
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
-pub const M: usize = 3; // bits
-pub const N: usize = 1 << M; // 8
+// M is generated at build time by build.rs.
+// Set via: Cargo feature (m2/m3/m4/m5), VEILED_M env var, or default (m3).
+//   cargo build --features m2           # M=2, N=4
+//   cargo build --features m4           # M=4, N=16
+//   VEILED_M=5 cargo build              # M=5, N=32
+include!(concat!(env!("OUT_DIR"), "/constants.rs"));
+pub const N: usize = 1 << M;
 
 /// CRS domain separation tag — shared with crs.rs.
 pub const CRS_DST: &[u8] = b"CRS-ASC-v1";

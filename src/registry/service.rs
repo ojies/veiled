@@ -232,12 +232,18 @@ impl Registry for RegistryService {
             active_set.finalized
         );
 
-        let commitments: Vec<Vec<u8>> = active_set
-            .registry
-            .anonymity_set()
-            .iter()
-            .map(|c| c.0.to_vec())
-            .collect();
+        // Pad the anonymity set to N (ZK proof requires exactly N = 2^M commitments).
+        // Duplicate the last commitment for padding slots.
+        use crate::core::utils::N;
+        let raw = active_set.registry.anonymity_set();
+        let mut commitments: Vec<Vec<u8>> = raw.iter().map(|c| c.0.to_vec()).collect();
+        if !commitments.is_empty() && commitments.len() < N {
+            let last = commitments.last().unwrap().clone();
+            while commitments.len() < N {
+                commitments.push(last.clone());
+            }
+            info!("get_anonymity_set: padded {} -> {} commitments (N={})", raw.len(), commitments.len(), N);
+        }
 
         Ok(Response::new(GetAnonymitySetResponse {
             commitments,
@@ -313,14 +319,18 @@ impl Registry for RegistryService {
             }
 
             // Fetch finalized data
+            use crate::core::utils::N;
             let store_guard = store.lock().await;
             if let Some(active_set) = store_guard.active_sets.get(&set_id) {
-                let commitments = active_set
-                    .registry
-                    .anonymity_set()
-                    .iter()
-                    .map(|c| c.0.to_vec())
-                    .collect();
+                let raw = active_set.registry.anonymity_set();
+                let mut commitments: Vec<Vec<u8>> = raw.iter().map(|c| c.0.to_vec()).collect();
+                // Pad to N for ZK proof compatibility
+                if !commitments.is_empty() && commitments.len() < N {
+                    let last = commitments.last().unwrap().clone();
+                    while commitments.len() < N {
+                        commitments.push(last.clone());
+                    }
+                }
                 let _ = tx
                     .send(Ok(GetAnonymitySetResponse {
                         commitments,
