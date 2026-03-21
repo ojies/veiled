@@ -425,6 +425,9 @@ fn handle_send(params: serde_json::Value) -> Result<serde_json::Value, String> {
     let _ = save_checkpoint(&p.state_path, &wallet);
 
     let balance = wallet.balance();
+    let total = balance.confirmed.to_sat()
+        + balance.trusted_pending.to_sat()
+        + balance.untrusted_pending.to_sat();
     eprintln!(
         "[wallet] {} pre-send balance: {} confirmed, {} pending, {} immature",
         state.wallet_name,
@@ -432,6 +435,45 @@ fn handle_send(params: serde_json::Value) -> Result<serde_json::Value, String> {
         balance.trusted_pending.to_sat() + balance.untrusted_pending.to_sat(),
         balance.immature.to_sat()
     );
+
+    // If BDK shows 0 spendable but we need funds, the checkpoint may have
+    // jumped past the funding block. Reset checkpoint to (tip - 200) and
+    // resync the recent window where funding likely happened.
+    if total == 0 && p.amount_sats > 0 {
+        let tip_height: u64 = {
+            let empty: Vec<serde_json::Value> = vec![];
+            rpc.call("getblockcount", &empty).unwrap_or(0)
+        };
+        let resync_from = tip_height.saturating_sub(200);
+        eprintln!(
+            "[wallet] {} has 0 spendable — resyncing from height {} (tip={}, window=200)",
+            state.wallet_name, resync_from, tip_height
+        );
+        let mut fresh_state = load_state(&p.state_path)?;
+        if resync_from == 0 {
+            fresh_state.checkpoint_height = None;
+            fresh_state.checkpoint_hash = None;
+        } else {
+            // Get the block hash at resync_from
+            let hash: String = rpc
+                .call("getblockhash", &[serde_json::json!(resync_from)])
+                .map_err(|e| format!("getblockhash: {e}"))?;
+            fresh_state.checkpoint_height = Some(resync_from as u32);
+            fresh_state.checkpoint_hash = Some(hash);
+        }
+        save_state(&p.state_path, &fresh_state)?;
+        wallet = recreate_wallet(&fresh_state)?;
+        sync_wallet(&mut wallet, &rpc)?;
+        let _ = save_checkpoint(&p.state_path, &wallet);
+        let balance2 = wallet.balance();
+        eprintln!(
+            "[wallet] {} after resync: {} confirmed, {} pending, {} immature",
+            state.wallet_name,
+            balance2.confirmed.to_sat(),
+            balance2.trusted_pending.to_sat() + balance2.untrusted_pending.to_sat(),
+            balance2.immature.to_sat()
+        );
+    }
 
     let to_addr = Address::from_str(&p.to_address)
         .map_err(|e| format!("invalid address: {e}"))?
