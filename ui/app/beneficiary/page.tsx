@@ -136,6 +136,42 @@ export default function BeneficiaryPage() {
     return () => clearInterval(interval);
   }, [initWaiting, checkInit]);
 
+  // Poll anonymity set status when registered but not yet finalized.
+  // Detects when another tab fills the set and triggers finalization.
+  useEffect(() => {
+    if (regIndex === null || finalized) return;
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/beneficiary/set-status");
+        const data = await res.json();
+        if (data.error) return;
+        setSetStatus({ count: data.count, capacity: data.capacity });
+        if (data.finalized && !finalized) {
+          setFinalized(true);
+          toast("Anonymity set sealed", "success");
+        } else if (!data.finalized && data.count >= data.capacity) {
+          // Set is full but not finalized — trigger finalization
+          try {
+            const fres = await fetch("/api/beneficiary/finalize", { method: "POST" });
+            const fdata = await fres.json();
+            if (fdata.finalized) {
+              setFinalized(true);
+              setSetStatus({ count: fdata.count, capacity: fdata.capacity });
+              toast("Anonymity set finalized and sealed", "success");
+            }
+          } catch {
+            // Another tab may be finalizing — next poll will detect it
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+    poll(); // check immediately
+    const interval = setInterval(poll, 3000);
+    return () => clearInterval(interval);
+  }, [regIndex, finalized, toast, setFinalized, setSetStatus]);
+
   // Poll incoming payments
   useEffect(() => {
     if (!walletCreated || !name) return;

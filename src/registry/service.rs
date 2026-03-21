@@ -58,7 +58,8 @@ impl Registry for RegistryService {
                 warn!("register_merchant FAILED for '{}': {}", req.name, e);
                 Status::already_exists(e)
             })?;
-        info!("register_merchant OK: '{}' (total merchants: {})", req.name, store.merchant_pool.len());
+        let merchant_names: Vec<&str> = store.merchant_pool.keys().map(|k| k.as_str()).collect();
+        info!("register_merchant OK: '{}' (total merchants: {} [{}])", req.name, store.merchant_pool.len(), merchant_names.join(", "));
         Ok(Response::new(MerchantResponse {
             message: format!("Merchant '{}' registered", req.name),
         }))
@@ -88,7 +89,14 @@ impl Registry for RegistryService {
                 warn!("create_set FAILED for set {}: {}", req.set_id, e);
                 Status::invalid_argument(e)
             })?;
-        info!("create_set OK: set {} created", req.set_id);
+        info!(
+            "create_set OK: set {} created (merchants: {}, beneficiary capacity: {}, fee: {} sats/user, total sets: {})",
+            req.set_id,
+            req.merchant_names.len(),
+            req.beneficiary_capacity,
+            req.sats_per_user,
+            store.active_sets.len()
+        );
         Ok(Response::new(CreateSetResponse {
             message: format!("Set {} created", req.set_id),
         }))
@@ -193,7 +201,14 @@ impl Registry for RegistryService {
                 Status::not_found(e)
             })?;
         let crs_bytes = registry.crs.to_bytes();
-        info!("get_crs: set {} -> {} bytes", req.set_id, crs_bytes.len());
+        let set_info = store.active_sets.get(&req.set_id);
+        let ben_count = set_info.map(|s| s.registry.beneficiary_count()).unwrap_or(0);
+        let ben_cap = set_info.map(|s| s.beneficiary_capacity).unwrap_or(0);
+        let merchant_count = registry.crs.num_merchants();
+        info!(
+            "get_crs: set {} -> {} bytes ({} merchants, {}/{} beneficiaries)",
+            req.set_id, crs_bytes.len(), merchant_count, ben_count, ben_cap
+        );
         Ok(Response::new(GetCrsResponse { crs_bytes }))
     }
 
@@ -265,12 +280,19 @@ impl Registry for RegistryService {
         request: Request<GetAnonymitySetRequest>,
     ) -> Result<Response<Self::SubscribeSetFinalizationStream>, Status> {
         let set_id = request.into_inner().set_id;
-        info!("subscribe_set_finalization: set {}", set_id);
         let store = self.store.clone();
 
         // Get a watch receiver (briefly lock store)
         let (already_finalized, mut watch_rx) = {
             let store_guard = store.lock().await;
+            let set_info = store_guard.active_sets.get(&set_id);
+            let ben_count = set_info.map(|s| s.registry.beneficiary_count()).unwrap_or(0);
+            let ben_cap = set_info.map(|s| s.beneficiary_capacity).unwrap_or(0);
+            let finalized = set_info.map(|s| s.finalized).unwrap_or(false);
+            info!(
+                "subscribe_set_finalization: set {} ({}/{} beneficiaries, finalized={}, total merchants: {})",
+                set_id, ben_count, ben_cap, finalized, store_guard.merchant_pool.len()
+            );
             let active_set = store_guard
                 .active_sets
                 .get(&set_id)
