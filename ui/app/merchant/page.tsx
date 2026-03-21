@@ -101,7 +101,10 @@ export default function MerchantPage() {
     try {
       const res = await fetch(`/api/wallet/balance?name=${encodeURIComponent(walletName)}`);
       const data = await res.json();
-      setWalletBalance(data.total || 0);
+      const newBal = data.total || 0;
+      // Only update if balance increased or was already 0.
+      // scantxoutset can return 0 during mining races — ignore false drops.
+      setWalletBalance((prev: number) => (newBal >= prev ? newBal : prev));
     } catch {
       // ignore
     }

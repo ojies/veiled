@@ -5,7 +5,7 @@
 //   { names: ["alice", ...] } — send to named wallets
 
 import { NextResponse } from "next/server";
-import { faucet, send, createWallet, getAddress } from "@/lib/wallet";
+import { faucet, send, createWallet, getAddress, getBalanceFast } from "@/lib/wallet";
 import { FAUCET_AMOUNT_SATS } from "@/lib/config";
 import { log, logError } from "@/lib/log";
 
@@ -27,10 +27,18 @@ export async function POST(request: Request) {
       await faucet(miner.address, 1);
       log("wallet/faucet", `funded ${addr.slice(0, 20)}... OK`);
 
+      // If a wallet name was provided, return its post-mining balance
+      let balance;
+      if (body.wallet_name) {
+        balance = await getBalanceFast(body.wallet_name);
+        log("wallet/faucet", `post-mine balance for '${body.wallet_name}': ${balance.confirmed}`);
+      }
+
       return NextResponse.json({
         address: addr,
         amount_sats: FAUCET_AMOUNT_SATS,
         funded: true,
+        balance,
       });
     }
 
@@ -57,6 +65,15 @@ export async function POST(request: Request) {
 
     // Mine 1 block to confirm all sends
     await faucet(miner.address, 1);
+
+    // Fetch post-mining balances for all funded wallets
+    for (const name of names) {
+      if (results[name]?.funded) {
+        try {
+          results[name].balance = await getBalanceFast(name);
+        } catch { /* non-critical */ }
+      }
+    }
 
     return NextResponse.json({ results });
   } catch (err: any) {

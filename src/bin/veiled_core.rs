@@ -303,28 +303,56 @@ fn main() {
 
     if daemon {
         eprintln!("[core] daemon started (pid: {})", std::process::id());
+        use std::io::Write;
         let stdin = std::io::stdin();
+        let stdout = std::io::stdout();
         let reader = stdin.lock();
         for line in reader.lines() {
             let line = match line {
                 Ok(l) => l,
-                Err(_) => break,
+                Err(e) => {
+                    eprintln!("[core] stdin read error: {e}");
+                    break;
+                }
             };
             if line.trim().is_empty() {
                 continue;
             }
-            let output = match serde_json::from_str::<Command>(&line) {
-                Ok(cmd) => match dispatch(cmd) {
-                    Ok(val) => serde_json::to_string(&val).unwrap(),
-                    Err(e) => serde_json::to_string(&ErrorResponse { error: e }).unwrap(),
-                },
-                Err(e) => serde_json::to_string(&ErrorResponse {
-                    error: format!("invalid JSON: {e}"),
-                })
-                .unwrap(),
+            let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                match serde_json::from_str::<Command>(&line) {
+                    Ok(cmd) => match dispatch(cmd) {
+                        Ok(val) => serde_json::to_string(&val).unwrap(),
+                        Err(e) => serde_json::to_string(&ErrorResponse { error: e }).unwrap(),
+                    },
+                    Err(e) => serde_json::to_string(&ErrorResponse {
+                        error: format!("invalid JSON: {e}"),
+                    })
+                    .unwrap(),
+                }
+            }));
+            let output = match output {
+                Ok(s) => s,
+                Err(panic_info) => {
+                    let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    eprintln!("[core] PANIC caught: {}", msg);
+                    serde_json::to_string(&ErrorResponse {
+                        error: format!("internal panic: {msg}"),
+                    })
+                    .unwrap()
+                }
             };
-            println!("{output}");
+            if let Err(e) = writeln!(stdout.lock(), "{output}") {
+                eprintln!("[core] stdout write error (client gone?): {e}");
+                break;
+            }
         }
+        eprintln!("[core] daemon shutting down");
     } else {
         // Single-command mode (backwards compatible)
         let mut input = String::new();

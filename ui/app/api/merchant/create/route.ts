@@ -200,7 +200,7 @@ export async function POST(request: Request) {
       status: "running",
     });
   } catch (err: any) {
-    logError("merchant/create", `failed for '${name}'`, err);
+    logError("merchant/create", "failed", err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

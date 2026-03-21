@@ -27,9 +27,17 @@ MINER_RESULT=$(veiled-wallet <<< "{\"command\":\"get-address\",\"state_path\":\"
 MINER_ADDR=$(echo "$MINER_RESULT" | grep -o '"address":"[^"]*"' | head -1 | cut -d'"' -f4)
 echo "Miner address: $MINER_ADDR"
 
-# Pre-mine 200 blocks to miner (first 100 mature immediately, giving ~5000 BTC spendable)
-echo "Mining 200 blocks to miner..."
-veiled-wallet <<< "{\"command\":\"faucet\",\"address\":\"$MINER_ADDR\",\"blocks\":200,$RPC_ARGS}" >/dev/null
+# Mine 10 blocks to miner (coinbase rewards), then 101 maturity blocks to a
+# throwaway address. This keeps the miner wallet with only 10 UTXOs instead of
+# 200+, making subsequent sends fast (~1s vs ~80s).
+echo "Mining 10 blocks to miner..."
+veiled-wallet <<< "{\"command\":\"faucet\",\"address\":\"$MINER_ADDR\",\"blocks\":10,$RPC_ARGS}" >/dev/null
+
+# Create a throwaway address for maturity mining
+THROWAWAY_RESULT=$(veiled-wallet <<< "{\"command\":\"create-wallet\",\"state_path\":\"$WALLETS_DIR/throwaway.json\",\"name\":\"throwaway\",$RPC_ARGS}")
+THROWAWAY_ADDR=$(echo "$THROWAWAY_RESULT" | grep -o '"address":"[^"]*"' | head -1 | cut -d'"' -f4)
+echo "Mining 101 maturity blocks to throwaway ($THROWAWAY_ADDR)..."
+veiled-wallet <<< "{\"command\":\"faucet\",\"address\":\"$THROWAWAY_ADDR\",\"blocks\":101,$RPC_ARGS}" >/dev/null
 
 # Wait for registry wallet to exist (created by the registry entrypoint)
 echo "Waiting for registry wallet..."
@@ -50,4 +58,4 @@ veiled-wallet <<< "{\"command\":\"send\",\"state_path\":\"$WALLETS_DIR/miner.jso
 # Mine 1 block to confirm the send
 veiled-wallet <<< "{\"command\":\"faucet\",\"address\":\"$MINER_ADDR\",\"blocks\":1,$RPC_ARGS}" >/dev/null
 
-echo "Chain initialized. Miner has ~5000 BTC, registry funded with 1 BTC."
+echo "Chain initialized. Miner has ~500 BTC (10 coinbases), registry funded with 1 BTC."

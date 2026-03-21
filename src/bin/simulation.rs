@@ -244,8 +244,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let miner_addr = create_wallet("miner")?;
     step(&format!("Miner address: {}", miner_addr));
 
-    faucet(&miner_addr, 200)?;
-    step("Mined 200 blocks to miner (first 100 mature -> ~5000 BTC)");
+    // Mine 10 blocks to miner (coinbase rewards), then 101 maturity blocks to
+    // a throwaway address. Keeps miner wallet with only 10 UTXOs for fast sends.
+    faucet(&miner_addr, 10)?;
+    step("Mined 10 blocks to miner");
+    let throwaway_addr = create_wallet("throwaway")?;
+    faucet(&throwaway_addr, 101)?;
+    step("Mined 101 maturity blocks to throwaway");
     log_balance("miner", "Miner")?;
 
     // ── Start Registry with RPC ─────────────────────────────────
@@ -253,8 +258,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rpc_arc = Arc::new(rpc_client()?);
     let fee_config = FeeConfig {
-        min_sats_per_user: 200,
-        merchant_registration_fee: 500,
+        min_sats_per_user: 1000,
+        merchant_registration_fee: 3000,
     };
     let store = Arc::new(Mutex::new(RegistryStore::new(
         Some(rpc_arc.clone()),

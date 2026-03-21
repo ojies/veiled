@@ -55,8 +55,8 @@ services:
       - BITCOIN_RPC_URL=http://bitcoind:18443
       - BITCOIN_RPC_USER=veiled
       - BITCOIN_RPC_PASS=veiled
-      - BENEFICIARY_REGISTRATION_FEE=200
-      - MERCHANT_REGISTRATION_FEE=500
+      - BENEFICIARY_REGISTRATION_FEE=1000
+      - MERCHANT_REGISTRATION_FEE=3000
       - WALLETS_DIR=/app/data/wallets
       - REGISTRY_DB_PATH=/app/data/registry.db
       - LISTEN=0.0.0.0:50051
@@ -105,7 +105,7 @@ services:
       - REGISTRY_ADDRESS=registry:50051
       - REGISTRY_SERVER=http://registry:50051
       - WALLET_BIN=/app/bin/veiled-wallet
-      - HELPER_BIN=/app/bin/veiled-core
+      - CORE_BIN=/app/bin/veiled-core
       - MERCHANT_BIN=/app/bin/merchant
       - WALLETS_DIR=/app/data/wallets
       - PROTO_DIR=/app/proto

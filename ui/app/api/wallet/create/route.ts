@@ -31,6 +31,10 @@ export async function POST(request: Request) {
 
     // Create wallet (or load existing from state file — handled by Rust binary)
     const result = await createWallet(name);
+    if (!result.address) {
+      logError("wallet/create", `binary returned no address for '${name}'`, JSON.stringify(result));
+      return NextResponse.json({ error: "Wallet creation failed — no address returned" }, { status: 500 });
+    }
     log("wallet/create", `created: ${result.address}`, { existing: result.existing });
 
     setWallet(name, {

@@ -18,7 +18,7 @@ export async function GET(request: Request) {
     log("wallet/balance", `${name}: ${result.confirmed} confirmed, ${result.total} total`);
     return NextResponse.json(result);
   } catch (err: any) {
-    logError("wallet/balance", `failed for '${searchParams.get("name")}'`, err);
+    logError("wallet/balance", "failed", err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

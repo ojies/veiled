@@ -29,11 +29,11 @@ struct Args {
     rpc_pass: String,
 
     /// Minimum sats-per-user when creating a set (beneficiary registration fee)
-    #[arg(long, env = "BENEFICIARY_REGISTRATION_FEE", default_value = "200")]
+    #[arg(long, env = "BENEFICIARY_REGISTRATION_FEE", default_value = "1000")]
     beneficiary_fee: u64,
 
     /// Merchant registration fee in sats
-    #[arg(long, env = "MERCHANT_REGISTRATION_FEE", default_value = "500")]
+    #[arg(long, env = "MERCHANT_REGISTRATION_FEE", default_value = "3000")]
     merchant_fee: u64,
 
     /// SQLite database path for persistent state

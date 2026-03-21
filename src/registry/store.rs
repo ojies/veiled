@@ -42,8 +42,8 @@ pub struct FeeConfig {
 impl Default for FeeConfig {
     fn default() -> Self {
         Self {
-            min_sats_per_user: 200,
-            merchant_registration_fee: 500,
+            min_sats_per_user: 1000,
+            merchant_registration_fee: 3000,
         }
     }
 }

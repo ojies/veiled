@@ -33,7 +33,7 @@ LOG_DIR    := $(ROOT)/.logs
 REGISTRY_BIN := $(ROOT)/target/release/veiled-registry-grpc
 MERCHANT_BIN := $(ROOT)/target/release/merchant
 WALLET_BIN   := $(ROOT)/target/release/veiled-wallet
-HELPER_BIN   := $(ROOT)/target/release/veiled-core
+CORE_BIN   := $(ROOT)/target/release/veiled-core
 
 # ── Bitcoin config ──
 BTC_DATADIR  := $(DATA_DIR)/bitcoin
@@ -58,7 +58,7 @@ MERCHANT_START_PORT  := 50061
 REGISTRY_SERVER  := http://$(REGISTRY_LISTEN)
 # Must match registry --merchant-fee (default 500); override if registry was
 # started with a custom MERCHANT_REGISTRATION_FEE.
-MERCHANT_FEE     := 500
+MERCHANT_FEE     := 3000
 # Set ID the merchants will subscribe to; 0 = first set (before any set exists)
 MERCHANT_SET_ID  := 0
 
@@ -180,18 +180,23 @@ start-registry:
 	fi
 
 init-chain:
-	@echo "⛏  Initializing chain (pre-mining 200 blocks, funding registry)..."
+	@echo "⛏  Initializing chain (pre-mining, funding registry)..."
 	@# Create miner wallet
 	@$(WALLET_BIN) <<< '{"command":"create-wallet","state_path":"$(WALLETS)/miner.json","name":"miner","rpc_url":"$(BTC_RPC_URL)","rpc_user":"$(BTC_RPC_USER)","rpc_pass":"$(BTC_RPC_PASS)"}' > /dev/null 2>&1 || true
-	@# Pre-mine 200 blocks to miner (first 100 mature → ~5000 BTC spendable)
+	@# Mine 10 blocks to miner (coinbase rewards) + 101 maturity blocks to throwaway.
+	@# This keeps the miner wallet with only 10 UTXOs instead of 200+, making sends fast.
 	@MINER_ADDR=$$($(WALLET_BIN) <<< '{"command":"get-address","state_path":"$(WALLETS)/miner.json","rpc_url":"$(BTC_RPC_URL)","rpc_user":"$(BTC_RPC_USER)","rpc_pass":"$(BTC_RPC_PASS)"}' | grep -o '"address":"[^"]*"' | head -1 | cut -d'"' -f4); \
 	echo "  Miner: $$MINER_ADDR"; \
-	$(WALLET_BIN) <<< "{\"command\":\"faucet\",\"address\":\"$$MINER_ADDR\",\"blocks\":200,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1; \
+	$(WALLET_BIN) <<< "{\"command\":\"faucet\",\"address\":\"$$MINER_ADDR\",\"blocks\":10,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1; \
+	$(WALLET_BIN) <<< '{"command":"create-wallet","state_path":"$(WALLETS)/throwaway.json","name":"throwaway","rpc_url":"$(BTC_RPC_URL)","rpc_user":"$(BTC_RPC_USER)","rpc_pass":"$(BTC_RPC_PASS)"}' > /dev/null 2>&1 || true; \
+	THROWAWAY_ADDR=$$($(WALLET_BIN) <<< '{"command":"get-address","state_path":"$(WALLETS)/throwaway.json","rpc_url":"$(BTC_RPC_URL)","rpc_user":"$(BTC_RPC_USER)","rpc_pass":"$(BTC_RPC_PASS)"}' | grep -o '"address":"[^"]*"' | head -1 | cut -d'"' -f4); \
+	echo "  Maturity blocks -> $$THROWAWAY_ADDR"; \
+	$(WALLET_BIN) <<< "{\"command\":\"faucet\",\"address\":\"$$THROWAWAY_ADDR\",\"blocks\":101,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1; \
 	REGISTRY_ADDR=$$($(WALLET_BIN) <<< '{"command":"get-address","state_path":"$(WALLETS)/registry.json","rpc_url":"$(BTC_RPC_URL)","rpc_user":"$(BTC_RPC_USER)","rpc_pass":"$(BTC_RPC_PASS)"}' | grep -o '"address":"[^"]*"' | head -1 | cut -d'"' -f4); \
 	echo "  Registry: $$REGISTRY_ADDR"; \
 	$(WALLET_BIN) <<< "{\"command\":\"send\",\"state_path\":\"$(WALLETS)/miner.json\",\"to_address\":\"$$REGISTRY_ADDR\",\"amount_sats\":100000000,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1; \
-	$(WALLET_BIN) <<< "{\"command\":\"faucet\",\"address\":\"$$MINER_ADDR\",\"blocks\":1,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1
-	@echo "✅ Chain initialized (~5000 BTC in miner, 1 BTC in registry)"
+	$(WALLET_BIN) <<< "{\"command\":\"faucet\",\"address\":\"$$THROWAWAY_ADDR\",\"blocks\":1,\"rpc_url\":\"$(BTC_RPC_URL)\",\"rpc_user\":\"$(BTC_RPC_USER)\",\"rpc_pass\":\"$(BTC_RPC_PASS)\"}" > /dev/null 2>&1
+	@echo "✅ Chain initialized (~500 BTC in miner, 1 BTC in registry)"
 
 start-ui:
 	@if [ -f $(PIDS_DIR)/ui.pid ] && kill -0 $$(cat $(PIDS_DIR)/ui.pid) 2>/dev/null; then \
@@ -205,7 +210,7 @@ start-ui:
 		REGISTRY_ADDRESS=$(REGISTRY_LISTEN) \
 		REGISTRY_SERVER=$(REGISTRY_SERVER) \
 		WALLET_BIN=$(WALLET_BIN) \
-		HELPER_BIN=$(HELPER_BIN) \
+		CORE_BIN=$(CORE_BIN) \
 		MERCHANT_BIN=$(MERCHANT_BIN) \
 		WALLETS_DIR=$(WALLETS) \
 		PROTO_DIR=$(ROOT)/proto \

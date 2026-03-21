@@ -71,8 +71,9 @@ export class ProcessPool {
       this.rl = null;
     });
 
-    this.child.stderr?.on("data", () => {
-      // Discard stderr to prevent buffer filling up
+    this.child.stderr?.on("data", (data: Buffer) => {
+      // Forward daemon stderr to Node stderr so wallet/core logs are visible
+      process.stderr.write(data);
     });
 
     return this.child;
@@ -85,7 +86,7 @@ export class ProcessPool {
     // The input was already written when queued — we just track the pending response
   }
 
-  async call(input: Record<string, any>): Promise<any> {
+  private callOnce(input: Record<string, any>): Promise<any> {
     const proc = this.ensureProcess();
     const json = JSON.stringify(input) + "\n";
 
@@ -110,6 +111,29 @@ export class ProcessPool {
         proc.stdin!.write(json);
       }
     });
+  }
+
+  async call(input: Record<string, any>, retries = 1): Promise<any> {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await this.callOnce(input);
+      } catch (err: any) {
+        const isRetryable =
+          err.message?.includes("Process exited unexpectedly") ||
+          err.message?.includes("timed out");
+        if (isRetryable && attempt < retries) {
+          console.error(
+            `[process-pool] ${input.command} failed (attempt ${attempt + 1}/${retries + 1}), retrying: ${err.message}`
+          );
+          // Kill stale process so ensureProcess spawns a fresh one
+          this.shutdown();
+          await new Promise((r) => setTimeout(r, 100));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("unreachable");
   }
 
   shutdown() {

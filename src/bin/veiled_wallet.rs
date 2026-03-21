@@ -454,11 +454,16 @@ fn handle_send(params: serde_json::Value) -> Result<serde_json::Value, String> {
         unsigned_tx.output.len(),
         unsigned_tx.vsize()
     );
+    let max_log_inputs = 5;
     for (i, input) in unsigned_tx.input.iter().enumerate() {
-        eprintln!(
-            "[wallet]   vin[{}]: {}:{} (sequence: {})",
-            i, input.previous_output.txid, input.previous_output.vout, input.sequence
-        );
+        if i < max_log_inputs {
+            eprintln!(
+                "[wallet]   vin[{}]: {}:{} (sequence: {})",
+                i, input.previous_output.txid, input.previous_output.vout, input.sequence
+            );
+        } else if i == max_log_inputs {
+            eprintln!("[wallet]   ... and {} more inputs", unsigned_tx.input.len() - max_log_inputs);
+        }
     }
     for (i, output) in unsigned_tx.output.iter().enumerate() {
         let addr_label = if output.value.to_sat() == p.amount_sats {
@@ -672,13 +677,18 @@ fn handle_get_balance_fast(params: serde_json::Value) -> Result<serde_json::Valu
         state.wallet_name, total_sats, utxo_count
     );
     if let Some(utxos) = unspents {
-        for u in utxos {
+        let max_log = 5;
+        for (i, u) in utxos.iter().enumerate() {
+            if i >= max_log {
+                eprintln!("[wallet]   ... and {} more UTXOs", utxos.len() - max_log);
+                break;
+            }
             let amt = u["amount"].as_f64().unwrap_or(0.0);
             let sats = (amt * 100_000_000.0).round() as u64;
             let txid = u["txid"].as_str().unwrap_or("?");
             let vout = u["vout"].as_u64().unwrap_or(0);
             let addr = u["desc"].as_str().unwrap_or("?");
-            eprintln!("[wallet]   UTXO {}:{} -> {} sats ({})", &txid[..12], vout, sats, addr);
+            eprintln!("[wallet]   UTXO {}:{} -> {} sats ({})", &txid[..12.min(txid.len())], vout, sats, addr);
         }
     }
 
@@ -726,28 +736,59 @@ fn main() {
 
     if daemon {
         eprintln!("[wallet] daemon started (pid: {})", std::process::id());
+        // Flush stdout after every line to prevent buffering issues
+        use std::io::Write;
         let stdin = std::io::stdin();
+        let stdout = std::io::stdout();
         let reader = stdin.lock();
         for line in reader.lines() {
             let line = match line {
                 Ok(l) => l,
-                Err(_) => break, // stdin closed
+                Err(e) => {
+                    eprintln!("[wallet] stdin read error: {e}");
+                    break;
+                }
             };
             if line.trim().is_empty() {
                 continue;
             }
-            let output = match serde_json::from_str::<Command>(&line) {
-                Ok(cmd) => match dispatch(cmd) {
-                    Ok(val) => serde_json::to_string(&val).unwrap(),
-                    Err(e) => serde_json::to_string(&ErrorResponse { error: e }).unwrap(),
-                },
-                Err(e) => serde_json::to_string(&ErrorResponse {
-                    error: format!("invalid JSON: {e}"),
-                })
-                .unwrap(),
+            // Catch panics so a single bad command doesn't kill the daemon
+            let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                match serde_json::from_str::<Command>(&line) {
+                    Ok(cmd) => match dispatch(cmd) {
+                        Ok(val) => serde_json::to_string(&val).unwrap(),
+                        Err(e) => serde_json::to_string(&ErrorResponse { error: e }).unwrap(),
+                    },
+                    Err(e) => serde_json::to_string(&ErrorResponse {
+                        error: format!("invalid JSON: {e}"),
+                    })
+                    .unwrap(),
+                }
+            }));
+            let output = match output {
+                Ok(s) => s,
+                Err(panic_info) => {
+                    let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    eprintln!("[wallet] PANIC caught: {}", msg);
+                    serde_json::to_string(&ErrorResponse {
+                        error: format!("internal panic: {msg}"),
+                    })
+                    .unwrap()
+                }
             };
-            println!("{output}");
+            // Write + flush to prevent broken pipe from killing the daemon
+            if let Err(e) = writeln!(stdout.lock(), "{output}") {
+                eprintln!("[wallet] stdout write error (client gone?): {e}");
+                break;
+            }
         }
+        eprintln!("[wallet] daemon shutting down");
     } else {
         // Single-command mode (backwards compatible)
         let mut input = String::new();
