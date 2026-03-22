@@ -10,7 +10,8 @@ pub mod tx;
 pub mod types;
 pub mod utils;
 pub mod verifier;
-pub mod full_flow_test;
+#[cfg(test)]
+mod full_flow_test;
 
 pub use utils::commit;
 pub use beneficiary::Beneficiary;

@@ -2,18 +2,24 @@
 name = "veiled"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85"
 
 [lib]
 name = "veiled"
 path = "src/lib.rs"
 
 [[bin]]
-name = "veiled-registry"
-path = "src/bin/registry.rs"
+name = "veiled-registry-grpc"
+path = "src/bin/registry_grpc.rs"
+
 
 [[bin]]
-name = "veiled-cli"
-path = "src/bin/cli.rs"
+name = "veiled-core"
+path = "src/bin/veiled_core.rs"
+
+[[bin]]
+name = "veiled-wallet"
+path = "src/bin/veiled_wallet.rs"
 
 [dependencies]
 # Core
@@ -23,23 +29,41 @@ serde = { version = "1", features = ["derive"] }
 k256 = { version = "0.13", features = ["arithmetic", "hash2curve"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 hkdf = "0.12"
+bip39 = "2"
+bitcoincore-rpc = "0.19"
+
+# BDK wallet (replaces raw bitcoind wallet management)
+bdk_wallet = "2"
+bdk_bitcoind_rpc = "0.21"
 
 # Registry
-axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
-tower-http = { version = "0.5", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
 bitcoin = { version = "0.32", features = ["serde", "rand-std"] }
+tonic = "0.12"
+prost = "0.13"
+tokio-stream = "0.1"
+
+# Persistence
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 # CLI
-clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+clap = { version = "4", features = ["derive", "env"] }
 rand = "0.8"
+
+[features]
+default = ["m2"]
+m2 = []  # N=4  (4 beneficiaries)
+m3 = []  # N=8  (8 beneficiaries, default)
+m4 = []  # N=16 (16 beneficiaries)
+m5 = []  # N=32 (32 beneficiaries)
+
+[build-dependencies]
+tonic-build = "0.12"
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }
 http-body-util = "0.1"
-bitcoincore-rpc = "0.19"
+tempfile = "3"

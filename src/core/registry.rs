@@ -29,6 +29,7 @@ use crate::core::types::Commitment;
 /// 2. `add_merchant()` — accumulate merchants.
 /// 3. `setup()` — create the CRS from collected merchants (Phase 0 complete).
 /// 4. `add_beneficiary()` — collect Φ commitments (Phase 2).
+///
 /// A Taproot commitment transaction anchoring the anonymity set on-chain.
 #[derive(Debug, Clone)]
 pub struct TaprootCommitment {
@@ -108,8 +109,9 @@ impl Registry {
     /// Create the CRS from all collected merchants (Phase 0).
     ///
     /// Calls `Crs::setup(merchants, set_size)` to derive all generators.
-    pub fn setup(&mut self) {
+    pub fn setup(&mut self) -> Self {
         self.crs = Crs::setup(self.merchants.clone(), self.set_size);
+        return self.clone()
     }
 
     /// Add a beneficiary's commitment Φ to the current anonymity set.

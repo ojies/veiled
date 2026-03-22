@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package registry;
+
+service Registry {
+  // Mutations
+  rpc RegisterMerchant (MerchantRequest) returns (MerchantResponse);
+  rpc RegisterBeneficiary (BeneficiaryRequest) returns (BeneficiaryResponse);
+  rpc FinalizeSet (FinalizeSetRequest) returns (FinalizeSetResponse);
+
+  // Queries
+  rpc GetMerchants (GetMerchantsRequest) returns (GetMerchantsResponse);
+  rpc GetCrs (GetCrsRequest) returns (GetCrsResponse);
+  rpc GetAnonymitySet (GetAnonymitySetRequest) returns (GetAnonymitySetResponse);
+  rpc GetRegistryAddress (GetRegistryAddressRequest) returns (GetRegistryAddressResponse);
+  rpc GetFees (GetFeesRequest) returns (GetFeesResponse);
+
+  // Subscriptions
+  rpc SubscribeSetFinalization (GetAnonymitySetRequest) returns (stream GetAnonymitySetResponse);
+
+  // Test / dev utilities
+  rpc Reset (ResetRequest) returns (ResetResponse);
+}
+
+// ── Mutations ──────────────────────────────────────────────
+
+message MerchantRequest {
+  string name = 1;
+  string origin = 2;
+  string email = 3;
+  string phone = 4;
+  bytes funding_txid = 5;  // 32-byte txid of payment tx
+  uint32 funding_vout = 6; // output index within payment tx
+}
+
+message MerchantResponse {
+  string message = 1;
+  uint32 merchant_id = 2;
+}
+
+message BeneficiaryRequest {
+  bytes phi = 1; // 33-byte commitment
+  string name = 2;
+  string email = 3;
+  string phone = 4;
+  bytes funding_txid = 5;  // 32-byte txid of payment tx
+  uint32 funding_vout = 6; // output index within payment tx
+}
+
+message BeneficiaryResponse {
+  string message = 1;
+  uint32 index = 2;
+}
+
+message FinalizeSetRequest {
+  bytes set_id = 1;  // 32-byte set identifier
+}
+
+message FinalizeSetResponse {
+  string message = 1;
+  bytes set_id = 2;  // 32-byte txid of the commitment transaction
+}
+
+// ── Queries ────────────────────────────────────────────────
+
+message GetMerchantsRequest {}
+
+message GetMerchantsResponse {
+  repeated MerchantEntry merchants = 1;
+}
+
+message MerchantEntry {
+  string name = 1;
+  string origin = 2;
+  bytes credential_generator = 3; // 33-byte compressed pk
+}
+
+message GetCrsRequest {
+  bytes set_id = 1;  // 32-byte set identifier
+}
+
+message GetCrsResponse {
+  bytes crs_bytes = 1;
+}
+
+message GetAnonymitySetRequest {
+  bytes set_id = 1;  // 32-byte set identifier
+}
+
+message GetAnonymitySetResponse {
+  repeated bytes commitments = 1; // each 33 bytes
+  bool finalized = 2;
+  uint32 count = 3;
+  uint32 capacity = 4;
+}
+
+message GetRegistryAddressRequest {
+  bytes set_id = 1;  // 32-byte set identifier
+}
+
+message GetRegistryAddressResponse {
+  string address = 1;       // P2TR bech32m address (bcrt1p... on regtest)
+  bytes internal_key = 2;   // 32-byte x-only public key
+}
+
+message GetFeesRequest {}
+
+message GetFeesResponse {
+  uint64 beneficiary_fee = 1;  // sats required per beneficiary registration
+  uint64 merchant_fee = 2;     // sats required per merchant registration
+}
+
+message ResetRequest {}
+
+message ResetResponse {
+  string message = 1;
+}

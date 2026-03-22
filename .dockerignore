@@ -1,0 +1,8 @@
+target/
+.wallets/
+ui/node_modules/
+ui/.next/
+ui/pnpm-lock.yaml
+*.swp
+*.swo
+.git/

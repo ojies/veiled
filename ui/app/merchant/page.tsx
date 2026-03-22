@@ -1,0 +1,661 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import Stepper from "@/components/Stepper";
+import PhaseCard from "@/components/PhaseCard";
+import WalletCard from "@/components/WalletCard";
+import HexDisplay from "@/components/HexDisplay";
+import { useToast } from "@/components/ToastProvider";
+import { useSessionState } from "@/lib/useLocalState";
+import { MERCHANT_NAMES } from "@/lib/demo-participants";
+
+interface Identity {
+  beneficiary: string;
+  pseudonym: string;
+  nullifier: string;
+}
+
+interface PaymentRow {
+  beneficiary: string;
+  amount: number;
+  address: string;
+}
+
+const STEPS = [
+  { label: "Create Wallet" },
+  { label: "Register" },
+  { label: "Dashboard" },
+];
+
+export default function MerchantPage() {
+  const { toast } = useToast();
+  const [tabIndex] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("tab");
+  });
+
+  // Persisted state (per-tab via sessionStorage, keyed by tab index)
+  const tabKey = tabIndex ? `:${tabIndex}` : "";
+  const defaultMerchant = tabIndex ? (MERCHANT_NAMES[Number(tabIndex)] ?? null) : null;
+  const [merchantName, setMerchantName] = useSessionState(`merch:name${tabKey}`, defaultMerchant?.name ?? "");
+  const [merchantOrigin, setMerchantOrigin] = useSessionState(`merch:origin${tabKey}`, defaultMerchant?.origin ?? "");
+  const [registered, setRegistered] = useSessionState(`merch:registered${tabKey}`, false);
+  const [serverPort, setServerPort] = useSessionState(`merch:port${tabKey}`, 0);
+  const [walletAddress, setWalletAddress] = useSessionState(`merch:walletAddr${tabKey}`, "");
+  const [walletMnemonic, setWalletMnemonic] = useSessionState(`merch:walletMnemonic${tabKey}`, "");
+  const [walletName, setWalletName] = useSessionState(`merch:walletName${tabKey}`, "");
+  const [walletCreated, setWalletCreated] = useSessionState(`merch:walletCreated${tabKey}`, false);
+  const [merchantId, setMerchantId] = useSessionState<number | null>(`merch:merchantId${tabKey}`, null);
+
+  // Ephemeral state
+  const [serverStatus, setServerStatus] = useState("");
+  const [pasteToken, setPasteToken] = useState("");
+  const [pasteLoading, setPasteLoading] = useState(false);
+  const [pasteResult, setPasteResult] = useState<{ pseudonym: string; friendly_name: string } | null>(null);
+  const [payPasteToken, setPayPasteToken] = useState("");
+  const [payVerifyLoading, setPayVerifyLoading] = useState(false);
+  const [payVerifyResult, setPayVerifyResult] = useState<{ address: string; amount: number; friendly_name: string } | null>(null);
+  const [regLoading, setRegLoading] = useState(false);
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const [fees, setFees] = useState<{ beneficiary: number; merchant: number } | null>(null);
+
+  // Dashboard
+  const [identities, setIdentities] = useState<Identity[]>([]);
+  const [payments, setPayments] = useState<PaymentRow[]>([]);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [sendingTo, setSendingTo] = useState<string | null>(null);
+
+  const activeStep = !walletCreated ? 0 : !registered ? 1 : 2;
+
+  // Call setup/init on mount and after registration to fetch fees and
+  // trigger merchant gRPC server spawning once the set is created.
+  const callInit = useCallback(() => {
+    fetch("/api/setup/init", { method: "POST" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.fees) setFees(data.fees);
+        // If init succeeded and our server is pending, it may now be spawned
+        if (data.already_initialized && registered && serverStatus === "pending") {
+          setServerStatus("starting");
+        }
+      })
+      .catch(() => {});
+  }, [registered, serverStatus]);
+
+  useEffect(() => {
+    callInit();
+  }, [callInit]);
+
+  // Poll init while server is pending (triggers spawn once set is created)
+  useEffect(() => {
+    if (!registered || serverStatus !== "pending") return;
+    const interval = setInterval(callInit, 3000);
+    return () => clearInterval(interval);
+  }, [registered, serverStatus, callInit]);
+
+  // Create wallet on name entry
+  async function createWallet() {
+    if (!merchantName.trim()) return;
+    const wName = `merchant-${merchantName.toLowerCase().replace(/\s+/g, "-")}`;
+    setWalletLoading(true);
+    try {
+      const res = await fetch("/api/wallet/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: wName, role: "merchant" }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setWalletAddress(data.address);
+      setWalletMnemonic(data.mnemonic || "");
+      setWalletName(wName);
+      setWalletCreated(true);
+      toast("Wallet created", "success");
+    } catch (e: any) {
+      toast(e.message, "error");
+    }
+    setWalletLoading(false);
+  }
+
+  // Refresh balance
+  const refreshBalance = useCallback(async () => {
+    if (!walletName) return;
+    try {
+      const res = await fetch(`/api/wallet/balance?name=${encodeURIComponent(walletName)}`);
+      const data = await res.json();
+      const newBal = data.total || 0;
+      // Only update if balance increased or was already 0.
+      // scantxoutset can return 0 during mining races — ignore false drops.
+      setWalletBalance((prev: number) => (newBal >= prev ? newBal : prev));
+    } catch {
+      // ignore
+    }
+  }, [walletName]);
+
+  useEffect(() => {
+    if (walletCreated) {
+      refreshBalance();
+      const interval = setInterval(refreshBalance, 5000);
+      // Also refresh when user returns to this tab
+      const onVisible = () => {
+        if (document.visibilityState === "visible") refreshBalance();
+      };
+      document.addEventListener("visibilitychange", onVisible);
+      return () => {
+        clearInterval(interval);
+        document.removeEventListener("visibilitychange", onVisible);
+      };
+    }
+  }, [walletCreated, refreshBalance]);
+
+  // Allowed origin schemes — first entry is the default prepended when none is provided
+  const ALLOWED_SCHEMES = ["https://", "http://"];
+
+  function normalizeOrigin(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) return trimmed;
+    const hasScheme = ALLOWED_SCHEMES.some((s) => trimmed.toLowerCase().startsWith(s));
+    return hasScheme ? trimmed : ALLOWED_SCHEMES[0] + trimmed;
+  }
+
+  // Register merchant (spawn gRPC server)
+  async function registerMerchant() {
+    if (!merchantName.trim() || !merchantOrigin.trim()) return;
+    if (fees && walletBalance < fees.merchant) {
+      toast(
+        `Insufficient balance: need ${fees.merchant.toLocaleString()} sats, have ${walletBalance.toLocaleString()}. Fund your wallet first.`,
+        "error"
+      );
+      return;
+    }
+    setRegLoading(true);
+    const origin = normalizeOrigin(merchantOrigin);
+    try {
+      const res = await fetch("/api/merchant/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: merchantName.trim(),
+          origin,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setRegistered(true);
+      setServerStatus(data.status);
+      setServerPort(data.port);
+      setMerchantId(data.merchant_id ?? null);
+      if (data.status === "pending") {
+        toast(`Merchant "${merchantName}" registered — server will start when beneficiaries connect`, "success");
+      } else {
+        toast(`Merchant "${merchantName}" registered and server started`, "success");
+      }
+      await refreshBalance();
+    } catch (e: any) {
+      const msg = e.message || "Registration failed";
+      if (msg.includes("already")) {
+        toast("Merchant already registered", "error");
+      } else if (msg.includes("insufficient") || msg.includes("amount")) {
+        toast("Insufficient funds for registration fee. Use faucet to top up.", "error");
+      } else if (msg.includes("UNAVAILABLE") || msg.includes("connect")) {
+        toast("Cannot reach registry server", "error");
+      } else {
+        toast(msg, "error");
+      }
+    }
+    setRegLoading(false);
+  }
+
+  // Dashboard refresh
+  const refresh = useCallback(async () => {
+    if (!registered || !merchantName) return;
+    try {
+      const [idRes, payRes] = await Promise.all([
+        fetch(`/api/merchant/identities?merchant=${encodeURIComponent(merchantName)}`),
+        fetch(`/api/merchant/payments?merchant=${encodeURIComponent(merchantName)}`),
+      ]);
+      const idData = await idRes.json();
+      const payData = await payRes.json();
+      setIdentities(idData.identities || []);
+      setPayments(payData.payments || []);
+    } catch {
+      // ignore
+    }
+  }, [registered, merchantName]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!autoRefresh || !registered) return;
+    const interval = setInterval(refresh, 3000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, registered, refresh]);
+
+  // Send payment to beneficiary
+  async function sendPayment(address: string, amount: number) {
+    setSendingTo(address);
+    try {
+      const res = await fetch("/api/wallet/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: walletName,
+          to_address: address,
+          amount_sats: amount,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      toast(`Sent ${amount} sats to ${address.slice(0, 12)}...`, "success");
+      // Mine a block to confirm
+      await fetch("/api/wallet/faucet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ names: ["faucet-miner"] }),
+      });
+      await refreshBalance();
+    } catch (e: any) {
+      toast(e.message, "error");
+    }
+    setSendingTo(null);
+  }
+
+  async function receivePayment() {
+    if (!payPasteToken.trim() || !merchantName) return;
+    setPayVerifyLoading(true);
+    setPayVerifyResult(null);
+    try {
+      const res = await fetch("/api/merchant/verify-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          merchant_name: merchantName,
+          payment_token: payPasteToken.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setPayVerifyResult(data);
+      setPayPasteToken("");
+      toast(`Payment from ${data.friendly_name}: ${data.amount.toLocaleString()} sats`, "success");
+      await refresh();
+    } catch (e: any) {
+      toast(e.message, "error");
+    }
+    setPayVerifyLoading(false);
+  }
+
+  async function receiveRegistration() {
+    if (!pasteToken.trim() || !merchantName) return;
+    setPasteLoading(true);
+    setPasteResult(null);
+    try {
+      const res = await fetch("/api/merchant/receive-registration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ merchant_name: merchantName, registration_token: pasteToken.trim() }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setPasteResult(data);
+      setPasteToken("");
+      toast(`Registered ${data.friendly_name} — pseudonym saved`, "success");
+      await refresh();
+    } catch (e: any) {
+      toast(e.message, "error");
+    }
+    setPasteLoading(false);
+  }
+
+  const totalPayments = payments.reduce((sum, p) => sum + p.amount, 0);
+
+  return (
+    <div className="fade-in">
+      <h1 style={{ fontSize: "clamp(1.3rem, 5vw, 1.8rem)", fontWeight: 700, marginBottom: "0.5rem" }}>
+        Merchant Dashboard
+        {registered && merchantName && (
+          <span style={{ color: "#f5a623", fontSize: "0.7em", marginLeft: "0.5rem" }}>
+            {merchantName}
+          </span>
+        )}
+      </h1>
+      <p style={{ color: "#666", marginBottom: "1.5rem" }}>
+        Register your business, verify proofs, and process payments
+      </p>
+
+      <Stepper steps={STEPS} activeStep={activeStep} />
+
+      {/* Create Wallet */}
+      <PhaseCard
+        title="Create Wallet"
+        active={activeStep === 0}
+        completed={walletCreated}
+        defaultOpen={!walletCreated}
+      >
+        <div className="form-row">
+          <input
+            type="text"
+            placeholder="Merchant name (e.g., CoffeeCo)"
+            value={merchantName}
+            onChange={(e) => setMerchantName(e.target.value)}
+            style={{
+              background: "#111",
+              border: "1px solid #333",
+              borderRadius: "0.5rem",
+              padding: "0.5rem 0.75rem",
+              color: "#fff",
+              flex: 1,
+              minWidth: 0,
+            }}
+            disabled={walletCreated}
+          />
+          <button
+            className="btn"
+            onClick={createWallet}
+            disabled={walletLoading || !merchantName.trim() || walletCreated}
+          >
+            {walletLoading ? "Creating..." : walletCreated ? "Created" : "Create Wallet"}
+          </button>
+        </div>
+      </PhaseCard>
+
+      {/* Wallet Card */}
+      {walletCreated && (
+        <WalletCard
+          name={`${merchantName}'s Wallet`}
+          address={walletAddress}
+          balance={walletBalance}
+          mnemonic={walletMnemonic}
+        />
+      )}
+
+      {/* Register */}
+      <PhaseCard
+        title="Register Merchant"
+        active={activeStep === 1}
+        completed={registered}
+        locked={!walletCreated}
+      >
+        <div className="form-row" style={{ marginBottom: "0.75rem" }}>
+          <input
+            type="text"
+            placeholder="Origin URL (e.g., https://coffeeco.com)"
+            value={merchantOrigin}
+            onChange={(e) => setMerchantOrigin(e.target.value)}
+            style={{
+              background: "#111",
+              border: "1px solid #333",
+              borderRadius: "0.5rem",
+              padding: "0.5rem 0.75rem",
+              color: "#fff",
+              flex: 1,
+              minWidth: 0,
+            }}
+            disabled={registered}
+          />
+          <button
+            className="btn"
+            onClick={registerMerchant}
+            disabled={regLoading || registered || !merchantOrigin.trim()}
+          >
+            {regLoading ? "Starting..." : registered ? "Registered" : "Pay & Register"}
+          </button>
+        </div>
+        <p style={{ color: "#888", fontSize: "0.8rem" }}>
+          Registration fee: {fees ? fees.merchant.toLocaleString() : "..."} sats. This spawns a gRPC merchant server.
+        </p>
+        {registered && (
+          <div style={{ marginTop: "0.75rem" }}>
+            <span className={`badge ${serverStatus === "running" ? "badge-success" : serverStatus === "pending" ? "badge-warning" : "badge-info"}`}>
+              Server {serverStatus === "pending" ? "waiting for set creation" : serverStatus} on port {serverPort}
+            </span>
+          </div>
+        )}
+      </PhaseCard>
+
+      {/* Dashboard */}
+      {registered && (
+        <>
+          {/* Merchant ID — prominent copyable display */}
+          {merchantId !== null && (
+            <div style={{
+              background: "#0a1a0a",
+              border: "1px solid #2a4a2a",
+              borderRadius: "0.75rem",
+              padding: "1rem 1.25rem",
+              marginBottom: "1rem",
+              display: "flex",
+              alignItems: "center",
+              gap: "1rem",
+              flexWrap: "wrap",
+            }}>
+              <span style={{ color: "#4ade80", fontWeight: 600 }}>Merchant ID</span>
+              <code style={{
+                background: "#111",
+                border: "1px solid #333",
+                borderRadius: "0.4rem",
+                padding: "0.3rem 0.75rem",
+                fontSize: "1.25rem",
+                fontWeight: 700,
+                color: "#fff",
+                letterSpacing: "0.05em",
+              }}>{merchantId}</code>
+              <button
+                className="btn-outline"
+                style={{ fontSize: "0.8rem", padding: "0.25rem 0.75rem" }}
+                onClick={() => { navigator.clipboard.writeText(String(merchantId)); toast("Merchant ID copied", "success"); }}
+              >
+                Copy
+              </button>
+              <span style={{ color: "#666", fontSize: "0.8rem" }}>Share this ID with beneficiaries so they can register with you</span>
+            </div>
+          )}
+
+          {/* Register Beneficiary — paste token */}
+          <PhaseCard title="Register Beneficiary" defaultOpen active>
+            <p style={{ color: "#888", fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+              Paste the registration token provided by the beneficiary to verify their ZK proof.
+            </p>
+            <textarea
+              value={pasteToken}
+              onChange={(e) => setPasteToken(e.target.value)}
+              placeholder="Paste registration token here..."
+              rows={3}
+              style={{
+                width: "100%",
+                background: "#111",
+                border: "1px solid #333",
+                borderRadius: "0.5rem",
+                padding: "0.5rem 0.75rem",
+                color: "#fff",
+                fontFamily: "monospace",
+                fontSize: "0.8rem",
+                resize: "vertical",
+                marginBottom: "0.75rem",
+                boxSizing: "border-box",
+              }}
+            />
+            <button
+              className="btn"
+              onClick={receiveRegistration}
+              disabled={pasteLoading || !pasteToken.trim()}
+            >
+              {pasteLoading ? "Verifying..." : "Verify & Register"}
+            </button>
+            {pasteResult && (
+              <div style={{ marginTop: "0.75rem", padding: "0.75rem", background: "#0a1a0a", borderRadius: "0.5rem", border: "1px solid #2a4a2a" }}>
+                <p style={{ color: "#4ade80", fontWeight: 600, marginBottom: "0.25rem" }}>
+                  Registered: {pasteResult.friendly_name}
+                </p>
+                <HexDisplay value={pasteResult.pseudonym} label="Pseudonym" />
+              </div>
+            )}
+          </PhaseCard>
+
+          {/* Receive Payment — paste payment token */}
+          <PhaseCard title="Receive Payment" defaultOpen active>
+            <p style={{ color: "#888", fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+              Paste the payment token from a registered beneficiary to verify and queue payment.
+            </p>
+            <textarea
+              value={payPasteToken}
+              onChange={(e) => setPayPasteToken(e.target.value)}
+              placeholder="Paste payment token here..."
+              rows={3}
+              style={{
+                width: "100%",
+                background: "#111",
+                border: "1px solid #333",
+                borderRadius: "0.5rem",
+                padding: "0.5rem 0.75rem",
+                color: "#fff",
+                fontFamily: "monospace",
+                fontSize: "0.8rem",
+                resize: "vertical",
+                marginBottom: "0.75rem",
+                boxSizing: "border-box",
+              }}
+            />
+            <button
+              className="btn"
+              onClick={receivePayment}
+              disabled={payVerifyLoading || !payPasteToken.trim()}
+            >
+              {payVerifyLoading ? "Verifying..." : "Verify Payment"}
+            </button>
+            {payVerifyResult && (
+              <div style={{ marginTop: "0.75rem", padding: "0.75rem", background: "#0a1a0a", borderRadius: "0.5rem", border: "1px solid #2a4a2a" }}>
+                <p style={{ color: "#4ade80", fontWeight: 600, marginBottom: "0.25rem" }}>
+                  {payVerifyResult.friendly_name} — {payVerifyResult.amount.toLocaleString()} sats
+                </p>
+                <p style={{ color: "#999", fontSize: "0.85rem" }}>
+                  Address: <code style={{ color: "#ccc", fontSize: "0.8rem" }}>{payVerifyResult.address}</code>
+                </p>
+              </div>
+            )}
+          </PhaseCard>
+
+          {/* Stats */}
+          <div className="stats-row">
+            <div className="stat-card">
+              <div className="stat-value">{identities.length}</div>
+              <div className="stat-label">Registered Beneficiaries</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-value">{payments.length}</div>
+              <div className="stat-label">Payments</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-value">{totalPayments.toLocaleString()}</div>
+              <div className="stat-label">Total Sats</div>
+            </div>
+          </div>
+
+          {/* Refresh controls */}
+          <div className="form-row" style={{ marginBottom: "1rem" }}>
+            <button className="btn-outline" onClick={refresh}>
+              Refresh
+            </button>
+            <label style={{ color: "#999", fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "0.35rem" }}>
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={(e) => setAutoRefresh(e.target.checked)}
+              />
+              Auto-refresh
+            </label>
+          </div>
+
+          {/* Registered Beneficiaries */}
+          <PhaseCard title="Registered Beneficiaries" defaultOpen active>
+            {identities.length === 0 ? (
+              <p style={{ color: "#666" }}>
+                No beneficiaries registered yet. Waiting for incoming registrations...
+              </p>
+            ) : (
+              <div className="table-wrap">
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #333", textAlign: "left" }}>
+                      <th style={{ padding: "0.5rem" }}>Beneficiary</th>
+                      <th style={{ padding: "0.5rem" }}>Pseudonym</th>
+                      <th style={{ padding: "0.5rem" }}>Nullifier</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {identities.map((id, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid #222" }}>
+                        <td style={{ padding: "0.5rem" }}>{id.beneficiary}</td>
+                        <td style={{ padding: "0.5rem" }}>
+                          <HexDisplay value={id.pseudonym} />
+                        </td>
+                        <td style={{ padding: "0.5rem" }}>
+                          <HexDisplay value={id.nullifier} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </PhaseCard>
+
+          {/* Payments */}
+          <PhaseCard title="Payments" defaultOpen active>
+            {payments.length === 0 ? (
+              <p style={{ color: "#666" }}>
+                No payment requests yet. Waiting for beneficiary requests...
+              </p>
+            ) : (
+              <div className="table-wrap">
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #333", textAlign: "left" }}>
+                      <th style={{ padding: "0.5rem" }}>Beneficiary</th>
+                      <th style={{ padding: "0.5rem" }}>Amount</th>
+                      <th style={{ padding: "0.5rem" }}>P2TR Address</th>
+                      <th style={{ padding: "0.5rem" }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payments.map((p, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid #222" }}>
+                        <td style={{ padding: "0.5rem" }}>{p.beneficiary}</td>
+                        <td style={{ padding: "0.5rem" }}>{p.amount} sats</td>
+                        <td style={{ padding: "0.5rem" }}>
+                          <HexDisplay value={p.address} />
+                        </td>
+                        <td style={{ padding: "0.5rem" }}>
+                          <button
+                            className="faucet-btn faucet-btn--compact"
+                            onClick={() => sendPayment(p.address, p.amount)}
+                            disabled={sendingTo === p.address}
+                          >
+                            {sendingTo === p.address ? "Sending..." : "Send BTC"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </PhaseCard>
+
+          {/* Privacy note */}
+          <PhaseCard title="What you can see as a merchant">
+            <ul style={{ color: "#999", fontSize: "0.85rem", lineHeight: 1.8, paddingLeft: "1.25rem" }}>
+              <li>Pseudonym — unique to your merchant, cannot be linked to other merchants</li>
+              <li>Nullifier — prevents double-registration (Sybil resistance)</li>
+              <li>Friendly name — revealed by the beneficiary (privacy trade-off)</li>
+              <li>ZK proof verified — you know they&apos;re in the anonymity set, but not which position</li>
+            </ul>
+          </PhaseCard>
+        </>
+      )}
+    </div>
+  );
+}

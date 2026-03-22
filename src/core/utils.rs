@@ -17,8 +17,13 @@ use sha2::{Digest, };
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
-pub const M: usize = 3; // bits
-pub const N: usize = 1 << M; // 8
+// M is generated at build time by build.rs.
+// Set via: Cargo feature (m2/m3/m4/m5), VEILED_M env var, or default (m3).
+//   cargo build --features m2           # M=2, N=4
+//   cargo build --features m4           # M=4, N=16
+//   VEILED_M=5 cargo build              # M=5, N=32
+include!(concat!(env!("OUT_DIR"), "/constants.rs"));
+pub const N: usize = 1 << M;
 
 /// CRS domain separation tag — shared with crs.rs.
 pub const CRS_DST: &[u8] = b"CRS-ASC-v1";
@@ -114,6 +119,7 @@ pub fn scalar_from_bytes(b: &[u8; 32]) -> Scalar {
 // Spec section 3.5: "The inclusion of ϕ (the pseudonym) in the hash is
 // critical — it binds the proof to a specific pseudonym."
 
+#[allow(clippy::too_many_arguments)]
 pub fn fiat_shamir_challenge(
     crs_g: &ProjectivePoint,
     pseudonym: &[u8; 33],
@@ -133,7 +139,7 @@ pub fn fiat_shamir_challenge(
     hasher.update(point_to_bytes(crs_g)); // bind to CRS
     hasher.update(pseudonym);             // ϕ
     hasher.update(public_nullifier);      // nul_l
-    hasher.update(&(service_index as u64).to_be_bytes()); // l
+    hasher.update((service_index as u64).to_be_bytes()); // l
     hasher.update(set_id);                // d̂ (merkle root)
     hasher.update(name_scalar);           // bind revealed name
     for di in d_set {
