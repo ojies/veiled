@@ -1,22 +1,14 @@
-// POST /api/beneficiary/payment-id — Phase 3-4: register payment identity with merchant
+// POST /api/beneficiary/payment-id — Phase 3: create payment identity registration token
+// Returns a base64-encoded token the beneficiary copies and pastes into the merchant UI.
 
 import { NextResponse } from "next/server";
-import { getMerchantClient, grpcCall } from "@/lib/grpc";
 import { createPaymentId } from "@/lib/core";
 import { getState, getBeneficiary, updateBeneficiary, setPhase } from "@/lib/state";
 import { log, logError } from "@/lib/log";
 
-function getMerchantAddr(name: string): string | null {
-  const state = getState();
-  const proc = state.merchant_processes[name];
-  // Use 127.0.0.1 (not localhost) to avoid IPv6 ::1 resolution in Docker
-  if (proc) return `127.0.0.1:${proc.port}`;
-  return null;
-}
-
 export async function POST(request: Request) {
   try {
-    const { beneficiary, merchant } = await request.json();
+    const { beneficiary, merchant_id } = await request.json();
     const state = getState();
     const ben = getBeneficiary(beneficiary);
 
@@ -32,16 +24,14 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
-
-    // Find merchant index (1-indexed for the protocol)
-    const rawIdx = state.merchants.findIndex((m) => m.name === merchant);
-    if (rawIdx === -1) {
+    if (!merchant_id || typeof merchant_id !== "number") {
       return NextResponse.json(
-        { error: `unknown merchant '${merchant}'` },
+        { error: "merchant_id (number) required" },
         { status: 400 }
       );
     }
-    const merchantIdx = rawIdx + 1;
+
+    log("payment-id", `creating registration for '${beneficiary}', merchant_id=${merchant_id}`);
 
     // Generate ZK proof via helper
     const proofResult = await createPaymentId({
@@ -50,55 +40,43 @@ export async function POST(request: Request) {
       commitmentsHex: state.anonymity_set.commitments,
       index: ben.index,
       setId: state.set_id,
-      merchantId: merchantIdx,
+      merchantId: merchant_id,
     });
 
-    // Submit to merchant gRPC server
-    const merchantAddr = getMerchantAddr(merchant);
-    log("payment-id", `connecting to merchant '${merchant}' at ${merchantAddr}`);
-    if (!merchantAddr) {
-      logError("payment-id", `no running merchant server for '${merchant}'`);
-      return NextResponse.json(
-        { error: `no running merchant server for '${merchant}'` },
-        { status: 400 }
-      );
-    }
-    const merchantClient = getMerchantClient(merchantAddr);
-    await grpcCall(merchantClient, "SubmitPaymentRegistration", {
-      pseudonym: Buffer.from(proofResult.pseudonym, "hex"),
-      public_nullifier: Buffer.from(proofResult.nullifier, "hex"),
+    // Pack all fields into a base64 token for copy-paste to merchant UI
+    const tokenPayload = {
+      pseudonym: proofResult.pseudonym,
+      nullifier: proofResult.nullifier,
       set_id: proofResult.set_id,
       service_index: proofResult.service_index,
       friendly_name: proofResult.friendly_name,
-      proof: Buffer.from(proofResult.proof_hex, "hex"),
-    });
+      proof_hex: proofResult.proof_hex,
+    };
+    const registration_token = Buffer.from(JSON.stringify(tokenPayload)).toString("base64");
 
-    // Update state
+    // Record locally as pending (pseudonym confirmed once merchant accepts)
     const reg = {
-      merchant_name: merchant,
+      merchant_name: `merchant_id:${merchant_id}`,
       pseudonym: proofResult.pseudonym,
       nullifier: proofResult.nullifier,
-      status: "verified" as const,
+      status: "pending" as const,
     };
     updateBeneficiary(beneficiary, {
       registrations: [...ben.registrations, reg],
     });
     setPhase(3);
 
+    log("payment-id", `token created for '${beneficiary}', pseudonym=${proofResult.pseudonym.slice(0, 16)}...`);
+
     return NextResponse.json({
       beneficiary,
-      merchant,
+      merchant_id,
       pseudonym: proofResult.pseudonym,
       nullifier: proofResult.nullifier,
-      status: "verified",
+      registration_token,
     });
   } catch (err: any) {
-    const msg = err.message || String(err);
-    if (msg.includes("ECONNREFUSED") || msg.includes("UNAVAILABLE")) {
-      logError("payment-id", `merchant gRPC connection failed — is the merchant process running?`, err);
-    } else {
-      logError("payment-id", "failed", err);
-    }
-    return NextResponse.json({ error: msg }, { status: 500 });
+    logError("payment-id", "failed", err);
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

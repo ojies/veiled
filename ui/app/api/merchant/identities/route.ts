@@ -15,23 +15,12 @@ export async function GET(request: Request) {
   }
 
   const state = getState();
-  const identities: {
-    beneficiary: string;
-    pseudonym: string;
-    nullifier: string;
-  }[] = [];
-
-  for (const [name, ben] of Object.entries(state.beneficiaries)) {
-    for (const reg of ben.registrations) {
-      if (reg.merchant_name === merchant && reg.status === "verified") {
-        identities.push({
-          beneficiary: name,
-          pseudonym: reg.pseudonym,
-          nullifier: reg.nullifier,
-        });
-      }
-    }
-  }
+  const proc = state.merchant_processes[merchant];
+  const identities = (proc?.registered_identities ?? []).map((id) => ({
+    beneficiary: id.friendly_name,
+    pseudonym: id.pseudonym,
+    nullifier: id.nullifier,
+  }));
 
   return NextResponse.json({ merchant, identities });
 }

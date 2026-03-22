@@ -1,18 +1,9 @@
-// POST /api/beneficiary/payment — Phase 5: request payment from merchant
+// POST /api/beneficiary/payment — Phase 5: create payment request token
 
 import { NextResponse } from "next/server";
-import { getMerchantClient, grpcCall } from "@/lib/grpc";
-import { createPaymentRequest } from "@/lib/core";
+import { createPaymentRequest, pseudonymToAddress } from "@/lib/core";
 import { getState, getBeneficiary, updateBeneficiary, setPhase } from "@/lib/state";
 import { log, logError } from "@/lib/log";
-
-function getMerchantAddr(name: string): string | null {
-  const state = getState();
-  const proc = state.merchant_processes[name];
-  // Use 127.0.0.1 (not localhost) to avoid IPv6 ::1 resolution in Docker
-  if (proc) return `127.0.0.1:${proc.port}`;
-  return null;
-}
 
 export async function POST(request: Request) {
   try {
@@ -27,21 +18,17 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check registration exists for this merchant
-    const reg = ben.registrations.find((r) => r.merchant_name === merchant);
-    if (!reg) {
-      return NextResponse.json(
-        { error: `'${beneficiary}' not registered with '${merchant}'` },
-        { status: 400 }
-      );
+    if (!state.crs_hex) {
+      return NextResponse.json({ error: "CRS not initialized" }, { status: 400 });
     }
 
     // Extract CRS g generator (first 33 bytes after header: 4+4+4 = 12 bytes offset)
-    // CRS format: security_param(4) + L(4) + set_size(4) + g(33) + ...
-    const crsBytes = Buffer.from(state.crs_hex!, "hex");
-    const gHex = crsBytes.subarray(12, 12 + 33).toString("hex");
+    const crsBytes = Buffer.from(state.crs_hex, "hex");
+    const gHex = crsBytes.subarray(12, 45).toString("hex");
 
-    // Generate Schnorr proof via helper
+    log("payment", `creating payment request: beneficiary='${beneficiary}', merchant='${merchant}', amount=${amount}`);
+
+    // Generate Schnorr proof via veiled-core
     const proofResult = await createPaymentRequest({
       credentialRHex: ben.credential.r,
       merchantName: merchant,
@@ -49,50 +36,46 @@ export async function POST(request: Request) {
       amount,
     });
 
-    // Submit to merchant
-    const merchantAddr = getMerchantAddr(merchant);
-    log("payment", `connecting to merchant '${merchant}' at ${merchantAddr}, amount=${amount}`);
-    if (!merchantAddr) {
-      logError("payment", `no running merchant server for '${merchant}'`);
-      return NextResponse.json(
-        { error: `no running merchant server for '${merchant}'` },
-        { status: 400 }
-      );
-    }
-    const merchantClient = getMerchantClient(merchantAddr);
-    const resp: any = await grpcCall(merchantClient, "SubmitPaymentRequest", {
-      amount,
-      pseudonym: Buffer.from(proofResult.pseudonym, "hex"),
-      proof_r: Buffer.from(proofResult.proof_r, "hex"),
-      proof_s: Buffer.from(proofResult.proof_s, "hex"),
-    });
+    // Derive P2TR address from pseudonym
+    const { address } = await pseudonymToAddress({ pseudonymHex: proofResult.pseudonym });
 
-    // Update state
-    const payment = {
-      merchant_name: merchant,
+    // Build base64 payment token
+    const tokenObj = {
+      pseudonym: proofResult.pseudonym,
+      proof_r: proofResult.proof_r,
+      proof_s: proofResult.proof_s,
       amount,
-      address: resp.address,
-      friendly_name: resp.friendly_name,
+      merchant_name: merchant,
+      friendly_name: ben.credential.friendly_name,
     };
+    const token = Buffer.from(JSON.stringify(tokenObj)).toString("base64");
+
+    log("payment", `token created: address=${address}, pseudonym=${proofResult.pseudonym.slice(0, 16)}...`);
+
+    // Store payment in beneficiary state
     updateBeneficiary(beneficiary, {
-      payments: [...ben.payments, payment],
+      payments: [
+        ...ben.payments,
+        {
+          merchant_name: merchant,
+          amount,
+          address,
+          friendly_name: ben.credential.friendly_name,
+          token,
+        },
+      ],
     });
     setPhase(5);
 
     return NextResponse.json({
-      beneficiary,
-      merchant,
+      token,
+      address,
+      pseudonym: proofResult.pseudonym,
       amount,
-      address: resp.address,
-      friendly_name: resp.friendly_name,
+      merchant,
     });
   } catch (err: any) {
-    const msg = err.message || String(err);
-    if (msg.includes("ECONNREFUSED") || msg.includes("UNAVAILABLE")) {
-      logError("payment", `merchant gRPC connection failed — is the merchant process running?`, err);
-    } else {
-      logError("payment", "failed", err);
-    }
-    return NextResponse.json({ error: msg }, { status: 500 });
+    logError("payment", "failed", err);
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

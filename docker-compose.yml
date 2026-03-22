@@ -17,6 +17,12 @@ services:
       - -rpcuser=veiled
       - -rpcpassword=veiled
       - -fallbackfee=0.00001
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-regtest", "-rpcuser=veiled", "-rpcpassword=veiled", "getblockchaininfo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     networks:
       - veiled
 
@@ -40,7 +46,8 @@ services:
     networks:
       - veiled
     depends_on:
-      - bitcoind
+      bitcoind:
+        condition: service_healthy
 
   registry:
     build:
@@ -64,13 +71,20 @@ services:
       - WALLETS_DIR=/app/data/wallets
       - REGISTRY_DB_PATH=/app/data/registry.db
       - LISTEN=0.0.0.0:50051
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/50051"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
     volumes:
       - wallets:/app/data/wallets
       - registry-db:/app/data
     networks:
       - veiled
     depends_on:
-      - bitcoind
+      bitcoind:
+        condition: service_healthy
 
   chain-init:
     build:
@@ -92,8 +106,10 @@ services:
     networks:
       - veiled
     depends_on:
-      - bitcoind
-      - registry
+      bitcoind:
+        condition: service_healthy
+      registry:
+        condition: service_healthy
 
   ui:
     build:
@@ -128,8 +144,10 @@ services:
     networks:
       - veiled
     depends_on:
-      - bitcoind
-      - registry
+      bitcoind:
+        condition: service_healthy
+      registry:
+        condition: service_healthy
 
 networks:
   veiled:

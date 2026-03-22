@@ -76,7 +76,7 @@ async fn test_registry_e2e() -> Result<(), Box<dyn std::error::Error>> {
         beneficiary_capacity: 2,
         ..Config::default()
     };
-    let registry_addr = store.lock().await.wallet_address.to_string();
+    let registry_addr = store.lock().await.wallet.address.to_string();
 
     // ── Fund registry wallet ─────────────────────────────────────────────────
     // Mine 102 blocks to the registry address:

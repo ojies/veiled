@@ -17,8 +17,8 @@ import { describe, it, expect, beforeAll } from "vitest";
 
 const NEXT_URL = process.env.NEXT_URL || "http://localhost:3000";
 const BITCOIN_RPC_URL = process.env.BITCOIN_RPC_URL || "http://localhost:18443";
-const BITCOIN_RPC_USER = process.env.BITCOIN_RPC_USER || "user";
-const BITCOIN_RPC_PASS = process.env.BITCOIN_RPC_PASS || "password";
+const BITCOIN_RPC_USER = process.env.BITCOIN_RPC_USER || "veiled";
+const BITCOIN_RPC_PASS = process.env.BITCOIN_RPC_PASS || "veiled";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -36,8 +36,9 @@ async function api(path: string, body?: object): Promise<any> {
   return json;
 }
 
-async function bitcoinRpc(method: string, params: any[] = []): Promise<any> {
-  const res = await fetch(BITCOIN_RPC_URL, {
+async function bitcoinRpc(method: string, params: any[] = [], wallet?: string): Promise<any> {
+  const url = wallet ? `${BITCOIN_RPC_URL}/wallet/${wallet}` : BITCOIN_RPC_URL;
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -51,10 +52,19 @@ async function bitcoinRpc(method: string, params: any[] = []): Promise<any> {
   return data.result;
 }
 
-/** Mine n blocks to a throw-away address to advance the chain */
+/** Mine n blocks, directing coinbase rewards to the UI faucet miner wallet */
 async function mineBlocks(n: number): Promise<void> {
-  const addr = await bitcoinRpc("getnewaddress", []);
-  await bitcoinRpc("generatetoaddress", [n, addr]);
+  // Get the veiled miner wallet's address so block rewards go there
+  let minerAddr: string;
+  try {
+    const res = await api("/api/wallet/create", { name: "miner" });
+    minerAddr = res.address;
+  } catch {
+    // Fallback: mine to a throwaway bitcoind address if miner wallet unavailable
+    try { await bitcoinRpc("createwallet", ["test-miner"]); } catch {}
+    minerAddr = await bitcoinRpc("getnewaddress", [], "test-miner");
+  }
+  await bitcoinRpc("generatetoaddress", [n, minerAddr]);
 }
 
 // ── test ─────────────────────────────────────────────────────────────────────
@@ -65,9 +75,19 @@ describe("full-stack protocol flow", () => {
     await api("/api/reset", {});
   });
 
+  let alphaId: number;
+  let betaId: number;
+  let aliceAlphaToken: string;
+  let bobAlphaToken: string;
+  let beneficiaryNames: string[] = [];
+  let alicePaymentToken: string;
+  let alicePaymentAddress: string;
+
   it("Phase 0: fund miner wallet and pre-mine maturity blocks", async () => {
-    // Mine 200 blocks so the miner wallet (used by faucet) has coins + maturity
-    await mineBlocks(200);
+    // Mine 300 blocks to the miner wallet:
+    // - 200 of those will be mature at the end (> 100 confirmations)
+    // - Provides 200 * 50 BTC = 10,000 BTC in spendable balance for the faucet
+    await mineBlocks(300);
   });
 
   it("Phase 0: create and fund two merchants", async () => {
@@ -86,6 +106,8 @@ describe("full-stack protocol flow", () => {
     });
     expect(alpha.name).toBe("Alpha");
     expect(alpha.status).toBe("pending"); // spawn deferred until set created
+    expect(typeof alpha.merchant_id).toBe("number");
+    alphaId = alpha.merchant_id;
 
     const beta = await api("/api/merchant/create", {
       name: "Beta",
@@ -93,6 +115,8 @@ describe("full-stack protocol flow", () => {
     });
     expect(beta.name).toBe("Beta");
     expect(beta.status).toBe("pending");
+    expect(typeof beta.merchant_id).toBe("number");
+    betaId = beta.merchant_id;
   });
 
   it("Phase 0: setup/init builds CRS from merchants and reaches phase 0", async () => {
@@ -102,8 +126,6 @@ describe("full-stack protocol flow", () => {
     expect(init.merchants.length).toBeGreaterThanOrEqual(2);
     expect(init.capacity).toBeGreaterThan(0);
   });
-
-  let beneficiaryNames: string[] = [];
 
   it("Phase 1: create beneficiary credentials", async () => {
     beneficiaryNames = ["Alice", "Bob"];
@@ -158,5 +180,100 @@ describe("full-stack protocol flow", () => {
     expect(state.anonymity_set?.finalized).toBe(true);
     expect(state.anonymity_set?.count).toBe(beneficiaryNames.length);
     expect(state.anonymity_set?.commitments.length).toBeGreaterThan(0);
+  });
+
+  it("Phase 3: beneficiaries create payment-id tokens for merchant Alpha", async () => {
+    const alice = await api("/api/beneficiary/payment-id", {
+      beneficiary: "Alice",
+      merchant_id: alphaId,
+    });
+    expect(alice.registration_token).toBeTruthy();
+    expect(alice.pseudonym).toBeTruthy();
+    aliceAlphaToken = alice.registration_token;
+
+    const bob = await api("/api/beneficiary/payment-id", {
+      beneficiary: "Bob",
+      merchant_id: alphaId,
+    });
+    expect(bob.registration_token).toBeTruthy();
+    expect(bob.pseudonym).toBeTruthy();
+    bobAlphaToken = bob.registration_token;
+  });
+
+  it("Phase 4: merchant Alpha receives registration tokens and verifies ZK proofs", async () => {
+    const aliceReg = await api("/api/merchant/receive-registration", {
+      merchant_name: "Alpha",
+      registration_token: aliceAlphaToken,
+    });
+    expect(aliceReg.pseudonym).toBeTruthy();
+    expect(aliceReg.friendly_name).toBe("Alice");
+
+    const bobReg = await api("/api/merchant/receive-registration", {
+      merchant_name: "Alpha",
+      registration_token: bobAlphaToken,
+    });
+    expect(bobReg.pseudonym).toBeTruthy();
+    expect(bobReg.friendly_name).toBe("Bob");
+
+    // Pseudonyms are merchant-specific — must be distinct
+    expect(aliceReg.pseudonym).not.toBe(bobReg.pseudonym);
+  });
+
+  it("Phase 4: merchant Alpha's identity list contains both beneficiaries", async () => {
+    const res = await api("/api/merchant/identities?merchant=Alpha");
+    expect(res.identities.length).toBe(2);
+    const names = res.identities.map((i: any) => i.beneficiary);
+    expect(names).toContain("Alice");
+    expect(names).toContain("Bob");
+  });
+
+  it("Phase 5: Alice creates a payment request token for merchant Alpha", async () => {
+    const res = await api("/api/beneficiary/payment", {
+      beneficiary: "Alice",
+      merchant: "Alpha",
+      amount: 5000,
+    });
+    expect(res.token).toBeTruthy();
+    expect(res.address).toMatch(/^bcrt1p/);
+    expect(res.amount).toBe(5000);
+    alicePaymentToken = res.token;
+    alicePaymentAddress = res.address;
+  });
+
+  it("Phase 5: merchant Alpha verifies the payment token", async () => {
+    const res = await api("/api/merchant/verify-payment", {
+      merchant_name: "Alpha",
+      payment_token: alicePaymentToken,
+    });
+    expect(res.valid).toBe(true);
+    expect(res.address).toBe(alicePaymentAddress);
+    expect(res.amount).toBe(5000);
+    expect(res.friendly_name).toBe("Alice");
+  });
+
+  it("Phase 5: merchant Alpha's payments list includes Alice's payment", async () => {
+    const res = await api("/api/merchant/payments?merchant=Alpha");
+    const alice = res.payments.find((p: any) => p.beneficiary === "Alice");
+    expect(alice).toBeDefined();
+    expect(alice.amount).toBe(5000);
+    expect(alice.address).toBe(alicePaymentAddress);
+  });
+
+  it("Phase 5: merchant sends BTC and scantxoutset shows UTXO at payment address", async () => {
+    await api("/api/wallet/send", {
+      from: "merchant-alpha",
+      to_address: alicePaymentAddress,
+      amount_sats: 5000,
+    });
+    // Mine a confirmation block via the existing faucet mechanism (avoids miner wallet issues)
+    await api("/api/wallet/faucet", { names: ["faucet-miner"] });
+    const scan = await api(`/api/wallet/scan-address?address=${alicePaymentAddress}`);
+    expect(scan.total_amount_sats).toBeGreaterThanOrEqual(5000);
+    // Beneficiary payment receipt view: utxos must include txid and BTC amount
+    expect(scan.utxos.length).toBeGreaterThan(0);
+    const utxo = scan.utxos[0];
+    expect(utxo.txid).toBeTruthy();
+    expect(utxo.txid).toHaveLength(64); // 32-byte hex
+    expect(Math.round(utxo.amount * 1e8)).toBeGreaterThanOrEqual(5000);
   });
 });

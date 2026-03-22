@@ -1,6 +1,6 @@
 // Server-side in-memory simulation state (singleton across API routes)
 
-import type { SimState, BeneficiaryState, MerchantInfo, AnonymitySet, Credential, WalletInfo, MerchantProcess } from "./types";
+import type { SimState, BeneficiaryState, MerchantInfo, AnonymitySet, Credential, WalletInfo, MerchantProcess, MerchantIdentity, MerchantPayment } from "./types";
 
 const state: SimState = {
   phase: -1,
@@ -94,7 +94,22 @@ export function setRegistryAddress(address: string): void {
 }
 
 export function addMerchantProcess(name: string, proc: MerchantProcess): void {
+  if (!proc.registered_identities) proc.registered_identities = [];
   state.merchant_processes[name] = proc;
+}
+
+export function addMerchantIdentity(merchantName: string, identity: MerchantIdentity): void {
+  const proc = state.merchant_processes[merchantName];
+  if (proc) {
+    (proc.registered_identities ??= []).push(identity);
+  }
+}
+
+export function addMerchantPayment(merchantName: string, payment: MerchantPayment): void {
+  const proc = state.merchant_processes[merchantName];
+  if (proc) {
+    (proc.pending_payments ??= []).push(payment);
+  }
 }
 
 export function getMerchantProcess(name: string): MerchantProcess | undefined {

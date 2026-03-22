@@ -77,6 +77,32 @@ export async function buildCrs(params: {
   });
 }
 
+export async function receivePaymentId(params: {
+  crsHex: string;
+  commitmentsHex: string[];
+  pseudonymHex: string;
+  nullifierHex: string;
+  setId: number;
+  serviceIndex: number;
+  friendlyName: string;
+  proofHex: string;
+  merchantName: string;
+  merchantOrigin: string;
+}): Promise<{ pseudonym: string }> {
+  return callCore("receive-payment-id", {
+    crs_hex: params.crsHex,
+    commitments_hex: params.commitmentsHex,
+    pseudonym_hex: params.pseudonymHex,
+    nullifier_hex: params.nullifierHex,
+    set_id: params.setId,
+    service_index: params.serviceIndex,
+    friendly_name: params.friendlyName,
+    proof_hex: params.proofHex,
+    merchant_name: params.merchantName,
+    merchant_origin: params.merchantOrigin,
+  });
+}
+
 export async function createPaymentRequest(params: {
   credentialRHex: string;
   merchantName: string;
@@ -94,4 +120,24 @@ export async function createPaymentRequest(params: {
     crs_g_hex: params.crsGHex,
     amount: params.amount,
   });
+}
+
+export async function verifyPaymentRequest(params: {
+  crsGHex: string;
+  pseudonymHex: string;
+  proofRHex: string;
+  proofSHex: string;
+}): Promise<{ valid: boolean; address: string }> {
+  return callCore("verify-payment-request", {
+    crs_g_hex: params.crsGHex,
+    pseudonym_hex: params.pseudonymHex,
+    proof_r_hex: params.proofRHex,
+    proof_s_hex: params.proofSHex,
+  });
+}
+
+export async function pseudonymToAddress(params: {
+  pseudonymHex: string;
+}): Promise<{ address: string }> {
+  return callCore("pseudonym-to-address", { pseudonym_hex: params.pseudonymHex });
 }

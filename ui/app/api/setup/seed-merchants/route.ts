@@ -105,6 +105,7 @@ export async function POST() {
     addMerchantProcess(SEED_NAME, {
       name: SEED_NAME,
       origin: SEED_ORIGIN,
+      merchant_id: 0,
       port,
       pid,
       status: "starting",

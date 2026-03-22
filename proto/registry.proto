@@ -17,6 +17,9 @@ service Registry {
 
   // Subscriptions
   rpc SubscribeSetFinalization (GetAnonymitySetRequest) returns (stream GetAnonymitySetResponse);
+
+  // Test / dev utilities
+  rpc Reset (ResetRequest) returns (ResetResponse);
 }
 
 // ── Mutations ──────────────────────────────────────────────
@@ -105,4 +108,10 @@ message GetFeesRequest {}
 message GetFeesResponse {
   uint64 beneficiary_fee = 1;  // sats required per beneficiary registration
   uint64 merchant_fee = 2;     // sats required per merchant registration
+}
+
+message ResetRequest {}
+
+message ResetResponse {
+  string message = 1;
 }

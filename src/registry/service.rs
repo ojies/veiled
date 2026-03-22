@@ -7,6 +7,7 @@ use crate::registry::pb::{
     GetCrsRequest, GetCrsResponse, GetFeesRequest, GetFeesResponse, GetMerchantsRequest,
     GetMerchantsResponse, GetRegistryAddressRequest, GetRegistryAddressResponse,
     MerchantEntry, MerchantRequest, MerchantResponse,
+    ResetRequest, ResetResponse,
 };
 use crate::registry::store::RegistryStore;
 use bitcoin::hashes::Hash;
@@ -98,16 +99,20 @@ impl Registry for RegistryService {
             txid,
             vout: req.funding_vout,
         };
-        let merchant = Merchant::new(&req.name, &req.origin);
-        let id = self.registery_data.lock().await.add_merchant(merchant);
+        // Validate and persist in the store first (includes duplicate and payment checks).
         let mut store = self.store.lock().await;
         store
-            .add_merchant(&req.name, &req.origin, req.email, req.phone, outpoint, id, self.config.merchant_registration_fee)
+            .add_merchant(&req.name, &req.origin, req.email, req.phone, outpoint, 0, self.config.merchant_registration_fee)
             .map_err(|e| {
                 warn!("register_merchant FAILED for '{}': {}", req.name, e);
                 Status::already_exists(e)
             })?;
+        drop(store);
+        // Only add to the in-memory registry after the store confirms success.
+        let merchant = Merchant::new(&req.name, &req.origin);
+        let id = self.registery_data.lock().await.add_merchant(merchant);
 
+        let store = self.store.lock().await;
         let merchant_names: Vec<String> = store.merchant_pool.keys().cloned().collect();
         info!("register_merchant OK: '{}' (total merchants: {} [{}])", req.name, store.merchant_pool.len(), merchant_names.join(", "));
         Ok(Response::new(MerchantResponse {
@@ -152,6 +157,7 @@ impl Registry for RegistryService {
         // Verify payment and add beneficiary to the pending registry
         let store = self.store.lock().await;
         store
+            .wallet
             .verify_payment(&outpoint, self.config.min_sats_per_user)
             .map_err(|e| Status::failed_precondition(e))?;
         drop(store);
@@ -322,6 +328,26 @@ impl Registry for RegistryService {
         Ok(Response::new(GetFeesResponse {
             beneficiary_fee: self.config.min_sats_per_user,
             merchant_fee: self.config.merchant_registration_fee,
+        }))
+    }
+
+    async fn reset(
+        &self,
+        _request: Request<ResetRequest>,
+    ) -> Result<Response<ResetResponse>, Status> {
+        let mut store = self.store.lock().await;
+        let merchant_count = store.merchant_pool.len();
+        let set_count = store.active_sets.len();
+        store.merchant_pool.clear();
+        store.active_sets.clear();
+        drop(store);
+
+        let mut registry = self.registery_data.lock().await;
+        *registry = VieledRegistry::new(self.config.beneficiary_capacity, self.config.min_sats_per_user);
+
+        info!("reset: cleared {} merchants, {} active sets", merchant_count, set_count);
+        Ok(Response::new(ResetResponse {
+            message: format!("Reset: cleared {} merchants, {} active sets", merchant_count, set_count),
         }))
     }
 

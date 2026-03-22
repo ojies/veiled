@@ -4,6 +4,57 @@ import { useState } from "react";
 import { useToast } from "@/components/ToastProvider";
 import { clearAllLocalState } from "@/lib/useLocalState";
 
+function FinalizeSetCard() {
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{ count: number; capacity: number; set_id_hex: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleFinalize() {
+    setLoading(true);
+    setResult(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/beneficiary/finalize", { method: "POST" });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setResult({ count: data.count, capacity: data.capacity, set_id_hex: data.set_id_hex });
+      toast("Anonymity set finalized", "success");
+    } catch (e: any) {
+      const msg = e.message || "Finalization failed";
+      setError(msg);
+      toast(msg, "error");
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: "1.5rem" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+        <div>
+          <h3 style={{ fontWeight: 600, marginBottom: "0.25rem" }}>Finalize Set</h3>
+          <p style={{ color: "#888", fontSize: "0.85rem" }}>
+            Seal the anonymity set, broadcast the commitment tx, and mine a confirmation block.
+          </p>
+        </div>
+        <button className="btn" onClick={handleFinalize} disabled={loading} style={{ flexShrink: 0 }}>
+          {loading ? "Finalizing..." : "Finalize Set"}
+        </button>
+      </div>
+      {result && (
+        <div style={{ marginTop: "0.75rem", padding: "0.6rem 0.85rem", background: "#0a1a0a", borderRadius: "0.5rem", border: "1px solid #2a4a2a", fontSize: "0.85rem", color: "#4ade80" }}>
+          Finalized — {result.count}/{result.capacity} members &nbsp;·&nbsp; txid: <code style={{ color: "#fff" }}>{result.set_id_hex.slice(0, 16)}…</code>
+        </div>
+      )}
+      {error && (
+        <div style={{ marginTop: "0.75rem", padding: "0.6rem 0.85rem", background: "#1a0a0a", borderRadius: "0.5rem", border: "1px solid #4a2a2a", fontSize: "0.85rem", color: "#f87171" }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FundByAddress() {
   const { toast } = useToast();
   const [address, setAddress] = useState("");
@@ -105,6 +156,9 @@ export default function DemoPage() {
 
       {/* Fund by Address */}
       <FundByAddress />
+
+      {/* Finalize Set */}
+      <FinalizeSetCard />
 
       {/* Reset */}
       <div

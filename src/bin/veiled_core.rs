@@ -7,7 +7,8 @@
 //! Commands:
 //!   create-credential       Phase 1: generate secrets + compute Φ
 //!   register-locally        Phase 2: find index in anonymity set
-//!   create-payment-id       Phase 3: generate ZK proof for merchant
+//!   create-payment-id       Phase 3: generate ZK proof for merchant (beneficiary side)
+//!   receive-payment-id      Phase 3: verify and accept payment registration (merchant side)
 //!   create-payment-request  Phase 5: generate Schnorr proof
 
 use serde::{Deserialize, Serialize};
@@ -17,8 +18,14 @@ use veiled::core::beneficiary::Beneficiary;
 use veiled::core::credential::MasterCredential;
 use veiled::core::crs::Crs;
 use veiled::core::merchant::Merchant;
-use veiled::core::payment_identity::serialize_payment_identity_registration_proof;
-use veiled::core::request::create_payment_request;
+use veiled::core::payment_identity::{
+    deserialize_payment_identity_registration_proof, serialize_payment_identity_registration_proof,
+    PaymentIdentityRegistration,
+};
+use veiled::core::request::{
+    create_payment_request, verify_payment_request, pseudonym_to_address, PaymentRequestProof,
+};
+use bitcoin::Network;
 use veiled::core::types::{
     BlindingKey, ChildRandomness, Commitment, FriendlyName, MasterSecret, Name,
 };
@@ -118,6 +125,20 @@ struct BuildCrsParams {
 }
 
 #[derive(Deserialize)]
+struct ReceivePaymentIdParams {
+    crs_hex: String,
+    commitments_hex: Vec<String>,
+    pseudonym_hex: String,
+    nullifier_hex: String,
+    set_id: u64,
+    service_index: usize,
+    friendly_name: String,
+    proof_hex: String,
+    merchant_name: String,
+    merchant_origin: String,
+}
+
+#[derive(Deserialize)]
 struct CreatePaymentRequestParams {
     credential_r_hex: String,
     merchant_name: String,
@@ -148,11 +169,40 @@ struct CreatePaymentIdResponse {
 }
 
 #[derive(Serialize)]
+struct ReceivePaymentIdResponse {
+    pseudonym: String,
+}
+
+#[derive(Serialize)]
 struct CreatePaymentRequestResponse {
     pseudonym: String,
     proof_r: String,
     proof_s: String,
     amount: u64,
+}
+
+#[derive(Deserialize)]
+struct VerifyPaymentRequestParams {
+    crs_g_hex: String,
+    pseudonym_hex: String,
+    proof_r_hex: String,
+    proof_s_hex: String,
+}
+
+#[derive(Serialize)]
+struct VerifyPaymentRequestResponse {
+    valid: bool,
+    address: String,
+}
+
+#[derive(Deserialize)]
+struct PseudonymToAddressParams {
+    pseudonym_hex: String,
+}
+
+#[derive(Serialize)]
+struct PseudonymToAddressResponse {
+    address: String,
 }
 
 #[derive(Serialize)]
@@ -268,6 +318,46 @@ fn handle_create_payment_id(params: serde_json::Value) -> Result<serde_json::Val
     serde_json::to_value(resp).map_err(|e| e.to_string())
 }
 
+fn handle_receive_payment_id(params: serde_json::Value) -> Result<serde_json::Value, String> {
+    let p: ReceivePaymentIdParams =
+        serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
+    eprintln!(
+        "[core] receive-payment-id: merchant='{}', service_index={}, friendly_name='{}'",
+        p.merchant_name, p.service_index, p.friendly_name
+    );
+    let crs_bytes = hex::decode(&p.crs_hex).map_err(|e| format!("crs hex: {e}"))?;
+    let crs = Crs::from_bytes(&crs_bytes).map_err(|e| e.to_string())?;
+    let commitments: Vec<Commitment> = p
+        .commitments_hex
+        .iter()
+        .map(|h| hex_to_33(h).map(Commitment))
+        .collect::<Result<_, _>>()?;
+    let proof_bytes = hex::decode(&p.proof_hex).map_err(|e| format!("proof hex: {e}"))?;
+    let proof = deserialize_payment_identity_registration_proof(&proof_bytes)?;
+    let mut set_id_bytes = [0u8; 32];
+    set_id_bytes[..8].copy_from_slice(&p.set_id.to_le_bytes());
+    let registration = PaymentIdentityRegistration {
+        pseudonym: hex_to_33(&p.pseudonym_hex)?,
+        public_nullifier: hex_to_33(&p.nullifier_hex)?,
+        set_id: set_id_bytes,
+        service_index: p.service_index,
+        friendly_name: p.friendly_name,
+        proof,
+    };
+    let mut merchant = Merchant::new(&p.merchant_name, &p.merchant_origin);
+    let pseudonym = merchant
+        .receive_payment_registration(&crs, &commitments, &registration)
+        .map_err(|e| e.to_string())?;
+    eprintln!(
+        "[core] receive-payment-id OK: pseudonym={}...",
+        hex::encode(&pseudonym[..8])
+    );
+    let resp = ReceivePaymentIdResponse {
+        pseudonym: hex::encode(pseudonym),
+    };
+    serde_json::to_value(resp).map_err(|e| e.to_string())
+}
+
 fn handle_create_payment_request(params: serde_json::Value) -> Result<serde_json::Value, String> {
     let p: CreatePaymentRequestParams =
         serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
@@ -300,6 +390,41 @@ fn handle_create_payment_request(params: serde_json::Value) -> Result<serde_json
     serde_json::to_value(resp).map_err(|e| e.to_string())
 }
 
+fn handle_verify_payment_request(params: serde_json::Value) -> Result<serde_json::Value, String> {
+    let p: VerifyPaymentRequestParams =
+        serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
+    eprintln!(
+        "[core] verify-payment-request: pseudonym={}...",
+        &p.pseudonym_hex[..16.min(p.pseudonym_hex.len())]
+    );
+    let g_bytes = hex_to_33(&p.crs_g_hex)?;
+    let g = veiled::core::utils::point_from_bytes(&g_bytes).ok_or("invalid g point")?;
+    let pseudonym = hex_to_33(&p.pseudonym_hex)?;
+    let proof = PaymentRequestProof {
+        r: hex_to_33(&p.proof_r_hex)?,
+        s: hex_to_32(&p.proof_s_hex)?,
+    };
+    let valid = verify_payment_request(&g, &pseudonym, &proof);
+    let address = pseudonym_to_address(&pseudonym, Network::Regtest).map_err(|e| e)?;
+    eprintln!("[core] verify-payment-request: valid={}, address={}", valid, address);
+    let resp = VerifyPaymentRequestResponse { valid, address: address.to_string() };
+    serde_json::to_value(resp).map_err(|e| e.to_string())
+}
+
+fn handle_pseudonym_to_address(params: serde_json::Value) -> Result<serde_json::Value, String> {
+    let p: PseudonymToAddressParams =
+        serde_json::from_value(params).map_err(|e| format!("bad params: {e}"))?;
+    eprintln!(
+        "[core] pseudonym-to-address: pseudonym={}...",
+        &p.pseudonym_hex[..16.min(p.pseudonym_hex.len())]
+    );
+    let pseudonym = hex_to_33(&p.pseudonym_hex)?;
+    let address = pseudonym_to_address(&pseudonym, Network::Regtest).map_err(|e| e)?;
+    eprintln!("[core] pseudonym-to-address: address={}", address);
+    let resp = PseudonymToAddressResponse { address: address.to_string() };
+    serde_json::to_value(resp).map_err(|e| e.to_string())
+}
+
 // ── Command dispatch ──
 
 fn dispatch(cmd: Command) -> Result<serde_json::Value, String> {
@@ -311,7 +436,10 @@ fn dispatch(cmd: Command) -> Result<serde_json::Value, String> {
         "create-credential" => handle_create_credential(cmd.params),
         "register-locally" => handle_register_locally(cmd.params),
         "create-payment-id" => handle_create_payment_id(cmd.params),
+        "receive-payment-id" => handle_receive_payment_id(cmd.params),
         "create-payment-request" => handle_create_payment_request(cmd.params),
+        "verify-payment-request" => handle_verify_payment_request(cmd.params),
+        "pseudonym-to-address"   => handle_pseudonym_to_address(cmd.params),
         "ping" => Ok(serde_json::json!({"status": "ok"})),
         other => Err(format!("unknown command: {other}")),
     };

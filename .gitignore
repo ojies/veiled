@@ -18,6 +18,9 @@ target/
 **/mutants.out*/
 
 .trash
+.data
+.logs
+.pids
 .claude
 .bitcoin-regtest
 .wallets

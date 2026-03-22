@@ -29,6 +29,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         name: existing.name,
         port: existing.port,
+        merchant_id: existing.merchant_id,
         status: existing.status,
         existing: true,
       });
@@ -76,13 +77,26 @@ export async function POST(request: Request) {
       );
     }
 
-    // Store spawn params — the merchant binary will be spawned by setup/init
+    // Register merchant with the registry gRPC service (verifies payment on-chain)
+    const txidBytes = Buffer.from(fundingTxid, "hex");
+    const registerResp: any = await grpcCall(registry, "RegisterMerchant", {
+      name,
+      origin,
+      email: "",
+      phone: "",
+      funding_txid: txidBytes,
+      funding_vout: fundingVout,
+    });
+    log("merchant/create", `registered '${name}' with registry (id=${registerResp.merchant_id})`);
+
+    // Store spawn params — the merchant gRPC server binary will be spawned by setup/init
     // after the anonymity set is created (the binary needs GetCrs which
     // requires a set to exist).
     const port = nextPort++;
     addMerchantProcess(name, {
       name,
       origin,
+      merchant_id: registerResp.merchant_id,
       port,
       pid: 0,
       status: "pending",
@@ -101,6 +115,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       name,
       port,
+      merchant_id: registerResp.merchant_id,
       address: wallet.address,
       wallet_name: walletName,
       balance: balance.total,

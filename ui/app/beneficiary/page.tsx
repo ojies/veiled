@@ -70,7 +70,11 @@ export default function BeneficiaryPage() {
 
   // Ephemeral state (no persistence needed)
   const [merchants, setMerchants] = useState<Merchant[]>([]);
-  const [selectedMerchant, setSelectedMerchant] = useState("");
+  const [merchantIdInput, setMerchantIdInput] = useState("");
+  const [registrationToken, setRegistrationToken] = useState<string | null>(null);
+  const [paymentToken, setPaymentToken] = useState<string | null>(null);
+  const [paymentAddress, setPaymentAddress] = useState<string | null>(null);
+  const [addressSats, setAddressSats] = useState<number | null>(null);
   const [payMerchant, setPayMerchant] = useState("");
   const [payAmount, setPayAmount] = useState("5000");
   const [loading, setLoading] = useState("");
@@ -81,6 +85,7 @@ export default function BeneficiaryPage() {
 
   // Incoming payments
   const [incomingTxs, setIncomingTxs] = useState<IncomingTx[]>([]);
+  const [paymentUtxos, setPaymentUtxos] = useState<Record<string, { txid: string; amount_sats: number }[]>>({});
 
   // Memoize wallet name to avoid recomputing on every render
   const walletName = useMemo(
@@ -95,7 +100,7 @@ export default function BeneficiaryPage() {
     ? 1
     : !finalized
     ? 2
-    : registrations.filter((r) => r.status === "verified").length === 0
+    : registrations.length === 0
     ? 3
     : 4;
 
@@ -115,7 +120,7 @@ export default function BeneficiaryPage() {
         setRegistryAddress(data.registry_address || "");
         if (data.merchants) {
           setMerchants(data.merchants);
-          if (data.merchants.length) setSelectedMerchant(data.merchants[0].name);
+          if (data.merchants.length && !payMerchant) setPayMerchant(data.merchants[0].name);
         }
         return true;
       }
@@ -197,6 +202,28 @@ export default function BeneficiaryPage() {
     const interval = setInterval(poll, 3000);
     return () => clearInterval(interval);
   }, [walletCreated, name]);
+
+  // Poll payment addresses for incoming UTXOs (txid + amount)
+  useEffect(() => {
+    if (payments.length === 0) return;
+    const poll = async () => {
+      const updates: Record<string, { txid: string; amount_sats: number }[]> = {};
+      for (const p of payments) {
+        try {
+          const res = await fetch(`/api/wallet/scan-address?address=${encodeURIComponent(p.address)}`);
+          const data = await res.json();
+          updates[p.address] = (data.utxos ?? []).map((u: any) => ({
+            txid: u.txid,
+            amount_sats: Math.round(u.amount * 1e8),
+          }));
+        } catch { /* ignore */ }
+      }
+      setPaymentUtxos(updates);
+    };
+    poll();
+    const interval = setInterval(poll, 5000);
+    return () => clearInterval(interval);
+  }, [payments]);
 
   // Refresh balance
   const refreshBalance = useCallback(async () => {
@@ -338,16 +365,26 @@ export default function BeneficiaryPage() {
   }
 
   async function registerPaymentId() {
-    if (!selectedMerchant) return;
+    const mid = parseInt(merchantIdInput.trim(), 10);
+    if (isNaN(mid)) return;
     setLoading("payment-id");
+    setRegistrationToken(null);
     try {
       const data = await api("/api/beneficiary/payment-id", {
         beneficiary: name.trim(),
-        merchant: selectedMerchant,
+        merchant_id: mid,
       });
-      setRegistrations((prev) => [...prev, data]);
-      if (!payMerchant) setPayMerchant(selectedMerchant);
-      toast(`ZK proof verified by ${selectedMerchant}`, "success");
+      setRegistrationToken(data.registration_token);
+      setRegistrations((prev) => [
+        ...prev,
+        {
+          merchant_name: `Merchant #${mid}`,
+          pseudonym: data.pseudonym,
+          nullifier: data.nullifier,
+          status: "pending" as const,
+        },
+      ]);
+      toast("Registration token created — copy and send to merchant", "success");
     } catch (e: any) {
       toast(e.message, "error");
     }
@@ -364,16 +401,30 @@ export default function BeneficiaryPage() {
         amount: parseInt(payAmount),
       });
       setPayments((prev) => [...prev, data]);
-      toast(`Payment of ${payAmount} sats requested from ${payMerchant}`, "success");
+      setPaymentToken(data.token ?? null);
+      setPaymentAddress(data.address ?? null);
+      setAddressSats(null);
+      toast(`Payment token created — copy and send to ${payMerchant}`, "success");
     } catch (e: any) {
       toast(e.message, "error");
     }
     setLoading("");
   }
 
-  const registeredMerchants = registrations
-    .filter((r) => r.status === "verified")
-    .map((r) => r.merchant_name);
+  async function checkPaymentAddress() {
+    if (!paymentAddress) return;
+    try {
+      const res = await fetch(
+        `/api/wallet/scan-address?address=${encodeURIComponent(paymentAddress)}`
+      );
+      const data = await res.json();
+      setAddressSats(data.total_amount_sats ?? 0);
+    } catch {
+      // ignore
+    }
+  }
+
+  const registeredMerchants = registrations.map((r) => r.merchant_name);
 
   const merchantsReady = initDone && !initWaiting;
 
@@ -515,32 +566,66 @@ export default function BeneficiaryPage() {
         completed={registeredMerchants.length > 0}
         locked={!finalized}
       >
+        <p style={{ color: "#888", fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+          Enter the Merchant ID shown in the merchant&apos;s dashboard, then create your registration token.
+        </p>
         <div className="form-row" style={{ marginBottom: "1rem" }}>
-          <select
-            value={selectedMerchant}
-            onChange={(e) => setSelectedMerchant(e.target.value)}
+          <input
+            type="number"
+            value={merchantIdInput}
+            onChange={(e) => setMerchantIdInput(e.target.value)}
+            placeholder="Merchant ID (e.g., 1)"
             style={{
               background: "#111",
               border: "1px solid #333",
               borderRadius: "0.5rem",
               padding: "0.5rem 0.75rem",
               color: "#fff",
+              width: "160px",
             }}
-          >
-            {merchants.map((m) => (
-              <option key={m.name} value={m.name}>
-                {m.name}
-              </option>
-            ))}
-          </select>
+          />
           <button
             className="btn"
             onClick={registerPaymentId}
-            disabled={!!loading || registeredMerchants.includes(selectedMerchant)}
+            disabled={!!loading || !merchantIdInput.trim()}
           >
-            {loading === "payment-id" ? "Proving..." : "Register"}
+            {loading === "payment-id" ? "Proving..." : "Create Registration"}
           </button>
         </div>
+
+        {registrationToken && (
+          <div style={{ marginBottom: "1rem" }}>
+            <p style={{ color: "#f5a623", fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem" }}>
+              Copy this token and paste it into the merchant&apos;s &quot;Register Beneficiary&quot; box:
+            </p>
+            <div style={{ position: "relative" }}>
+              <textarea
+                readOnly
+                value={registrationToken}
+                rows={3}
+                style={{
+                  width: "100%",
+                  background: "#111",
+                  border: "1px solid #444",
+                  borderRadius: "0.5rem",
+                  padding: "0.5rem 0.75rem",
+                  color: "#ccc",
+                  fontFamily: "monospace",
+                  fontSize: "0.75rem",
+                  resize: "none",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
+            <button
+              className="btn-outline"
+              style={{ fontSize: "0.8rem", padding: "0.25rem 0.75rem", marginTop: "0.4rem" }}
+              onClick={() => { navigator.clipboard.writeText(registrationToken); toast("Token copied", "success"); }}
+            >
+              Copy Token
+            </button>
+          </div>
+        )}
 
         {registrations.length > 0 && (
           <div className="table-wrap">
@@ -560,7 +645,7 @@ export default function BeneficiaryPage() {
                       <HexDisplay value={r.pseudonym} />
                     </td>
                     <td style={{ padding: "0.5rem" }}>
-                      <span className="badge badge-success">{r.status}</span>
+                      <span className={`badge ${r.status === "verified" ? "badge-success" : "badge-warning"}`}>{r.status}</span>
                     </td>
                   </tr>
                 ))}
@@ -602,7 +687,7 @@ export default function BeneficiaryPage() {
         title="Request Payment"
         active={activeStep === 4}
         completed={payments.length > 0}
-        locked={registeredMerchants.length === 0}
+        locked={registrations.length === 0}
       >
         <div className="form-row" style={{ marginBottom: "1rem" }}>
           <select
@@ -616,9 +701,9 @@ export default function BeneficiaryPage() {
               color: "#fff",
             }}
           >
-            {registeredMerchants.map((m) => (
-              <option key={m} value={m}>
-                {m}
+            {merchants.map((m) => (
+              <option key={m.name} value={m.name}>
+                {m.name}
               </option>
             ))}
           </select>
@@ -637,9 +722,57 @@ export default function BeneficiaryPage() {
             }}
           />
           <button className="btn" onClick={requestPayment} disabled={!!loading}>
-            {loading === "payment" ? "Authenticating..." : "Request"}
+            {loading === "payment" ? "Proving..." : "Create Token"}
           </button>
         </div>
+
+        {paymentToken && (
+          <div style={{ marginBottom: "1rem" }}>
+            <p style={{ color: "#f5a623", fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem" }}>
+              Copy this payment token and paste it into the merchant&apos;s &quot;Receive Payment&quot; box:
+            </p>
+            <div style={{ position: "relative" }}>
+              <textarea
+                readOnly
+                value={paymentToken}
+                rows={3}
+                style={{
+                  width: "100%",
+                  background: "#111",
+                  border: "1px solid #444",
+                  borderRadius: "0.5rem",
+                  padding: "0.5rem 0.75rem",
+                  color: "#ccc",
+                  fontFamily: "monospace",
+                  fontSize: "0.75rem",
+                  resize: "none",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.4rem", alignItems: "center" }}>
+              <button
+                className="btn-outline"
+                style={{ fontSize: "0.8rem", padding: "0.25rem 0.75rem" }}
+                onClick={() => { navigator.clipboard.writeText(paymentToken); toast("Token copied", "success"); }}
+              >
+                Copy Token
+              </button>
+              <button
+                className="btn-outline"
+                style={{ fontSize: "0.8rem", padding: "0.25rem 0.75rem" }}
+                onClick={checkPaymentAddress}
+              >
+                {addressSats !== null ? `${addressSats.toLocaleString()} sats received` : "Check Address"}
+              </button>
+              {paymentAddress && (
+                <span style={{ color: "#666", fontSize: "0.8rem" }}>
+                  Paying to: <code style={{ color: "#aaa" }}>{paymentAddress.slice(0, 20)}…</code>
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {payments.length > 0 && (
           <div className="table-wrap">
@@ -649,18 +782,31 @@ export default function BeneficiaryPage() {
                   <th style={{ padding: "0.5rem" }}>Merchant</th>
                   <th style={{ padding: "0.5rem" }}>Amount</th>
                   <th style={{ padding: "0.5rem" }}>P2TR Address</th>
+                  <th style={{ padding: "0.5rem" }}>TxID</th>
+                  <th style={{ padding: "0.5rem" }}>Received</th>
                 </tr>
               </thead>
               <tbody>
-                {payments.map((p, i) => (
+                {payments.map((p, i) => {
+                  const received = (paymentUtxos[p.address] ?? [])[0];
+                  return (
                   <tr key={i} style={{ borderBottom: "1px solid #222" }}>
                     <td style={{ padding: "0.5rem" }}>{p.merchant_name}</td>
                     <td style={{ padding: "0.5rem" }}>{p.amount} sats</td>
                     <td style={{ padding: "0.5rem" }}>
                       <HexDisplay value={p.address} />
                     </td>
+                    <td style={{ padding: "0.5rem" }}>
+                      {received
+                        ? <HexDisplay value={received.txid} />
+                        : <span style={{ color: "#555" }}>Pending…</span>}
+                    </td>
+                    <td style={{ padding: "0.5rem" }}>
+                      {received ? `${received.amount_sats.toLocaleString()} sats` : "—"}
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -45,9 +45,16 @@ export default function MerchantPage() {
   const [walletMnemonic, setWalletMnemonic] = useSessionState(`merch:walletMnemonic${tabKey}`, "");
   const [walletName, setWalletName] = useSessionState(`merch:walletName${tabKey}`, "");
   const [walletCreated, setWalletCreated] = useSessionState(`merch:walletCreated${tabKey}`, false);
+  const [merchantId, setMerchantId] = useSessionState<number | null>(`merch:merchantId${tabKey}`, null);
 
   // Ephemeral state
   const [serverStatus, setServerStatus] = useState("");
+  const [pasteToken, setPasteToken] = useState("");
+  const [pasteLoading, setPasteLoading] = useState(false);
+  const [pasteResult, setPasteResult] = useState<{ pseudonym: string; friendly_name: string } | null>(null);
+  const [payPasteToken, setPayPasteToken] = useState("");
+  const [payVerifyLoading, setPayVerifyLoading] = useState(false);
+  const [payVerifyResult, setPayVerifyResult] = useState<{ address: string; amount: number; friendly_name: string } | null>(null);
   const [regLoading, setRegLoading] = useState(false);
   const [walletBalance, setWalletBalance] = useState(0);
   const [walletLoading, setWalletLoading] = useState(false);
@@ -178,6 +185,7 @@ export default function MerchantPage() {
       setRegistered(true);
       setServerStatus(data.status);
       setServerPort(data.port);
+      setMerchantId(data.merchant_id ?? null);
       if (data.status === "pending") {
         toast(`Merchant "${merchantName}" registered — server will start when beneficiaries connect`, "success");
       } else {
@@ -253,6 +261,53 @@ export default function MerchantPage() {
       toast(e.message, "error");
     }
     setSendingTo(null);
+  }
+
+  async function receivePayment() {
+    if (!payPasteToken.trim() || !merchantName) return;
+    setPayVerifyLoading(true);
+    setPayVerifyResult(null);
+    try {
+      const res = await fetch("/api/merchant/verify-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          merchant_name: merchantName,
+          payment_token: payPasteToken.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setPayVerifyResult(data);
+      setPayPasteToken("");
+      toast(`Payment from ${data.friendly_name}: ${data.amount.toLocaleString()} sats`, "success");
+      await refresh();
+    } catch (e: any) {
+      toast(e.message, "error");
+    }
+    setPayVerifyLoading(false);
+  }
+
+  async function receiveRegistration() {
+    if (!pasteToken.trim() || !merchantName) return;
+    setPasteLoading(true);
+    setPasteResult(null);
+    try {
+      const res = await fetch("/api/merchant/receive-registration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ merchant_name: merchantName, registration_token: pasteToken.trim() }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setPasteResult(data);
+      setPasteToken("");
+      toast(`Registered ${data.friendly_name} — pseudonym saved`, "success");
+      await refresh();
+    } catch (e: any) {
+      toast(e.message, "error");
+    }
+    setPasteLoading(false);
   }
 
   const totalPayments = payments.reduce((sum, p) => sum + p.amount, 0);
@@ -364,6 +419,125 @@ export default function MerchantPage() {
       {/* Dashboard */}
       {registered && (
         <>
+          {/* Merchant ID — prominent copyable display */}
+          {merchantId !== null && (
+            <div style={{
+              background: "#0a1a0a",
+              border: "1px solid #2a4a2a",
+              borderRadius: "0.75rem",
+              padding: "1rem 1.25rem",
+              marginBottom: "1rem",
+              display: "flex",
+              alignItems: "center",
+              gap: "1rem",
+              flexWrap: "wrap",
+            }}>
+              <span style={{ color: "#4ade80", fontWeight: 600 }}>Merchant ID</span>
+              <code style={{
+                background: "#111",
+                border: "1px solid #333",
+                borderRadius: "0.4rem",
+                padding: "0.3rem 0.75rem",
+                fontSize: "1.25rem",
+                fontWeight: 700,
+                color: "#fff",
+                letterSpacing: "0.05em",
+              }}>{merchantId}</code>
+              <button
+                className="btn-outline"
+                style={{ fontSize: "0.8rem", padding: "0.25rem 0.75rem" }}
+                onClick={() => { navigator.clipboard.writeText(String(merchantId)); toast("Merchant ID copied", "success"); }}
+              >
+                Copy
+              </button>
+              <span style={{ color: "#666", fontSize: "0.8rem" }}>Share this ID with beneficiaries so they can register with you</span>
+            </div>
+          )}
+
+          {/* Register Beneficiary — paste token */}
+          <PhaseCard title="Register Beneficiary" defaultOpen active>
+            <p style={{ color: "#888", fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+              Paste the registration token provided by the beneficiary to verify their ZK proof.
+            </p>
+            <textarea
+              value={pasteToken}
+              onChange={(e) => setPasteToken(e.target.value)}
+              placeholder="Paste registration token here..."
+              rows={3}
+              style={{
+                width: "100%",
+                background: "#111",
+                border: "1px solid #333",
+                borderRadius: "0.5rem",
+                padding: "0.5rem 0.75rem",
+                color: "#fff",
+                fontFamily: "monospace",
+                fontSize: "0.8rem",
+                resize: "vertical",
+                marginBottom: "0.75rem",
+                boxSizing: "border-box",
+              }}
+            />
+            <button
+              className="btn"
+              onClick={receiveRegistration}
+              disabled={pasteLoading || !pasteToken.trim()}
+            >
+              {pasteLoading ? "Verifying..." : "Verify & Register"}
+            </button>
+            {pasteResult && (
+              <div style={{ marginTop: "0.75rem", padding: "0.75rem", background: "#0a1a0a", borderRadius: "0.5rem", border: "1px solid #2a4a2a" }}>
+                <p style={{ color: "#4ade80", fontWeight: 600, marginBottom: "0.25rem" }}>
+                  Registered: {pasteResult.friendly_name}
+                </p>
+                <HexDisplay value={pasteResult.pseudonym} label="Pseudonym" />
+              </div>
+            )}
+          </PhaseCard>
+
+          {/* Receive Payment — paste payment token */}
+          <PhaseCard title="Receive Payment" defaultOpen active>
+            <p style={{ color: "#888", fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+              Paste the payment token from a registered beneficiary to verify and queue payment.
+            </p>
+            <textarea
+              value={payPasteToken}
+              onChange={(e) => setPayPasteToken(e.target.value)}
+              placeholder="Paste payment token here..."
+              rows={3}
+              style={{
+                width: "100%",
+                background: "#111",
+                border: "1px solid #333",
+                borderRadius: "0.5rem",
+                padding: "0.5rem 0.75rem",
+                color: "#fff",
+                fontFamily: "monospace",
+                fontSize: "0.8rem",
+                resize: "vertical",
+                marginBottom: "0.75rem",
+                boxSizing: "border-box",
+              }}
+            />
+            <button
+              className="btn"
+              onClick={receivePayment}
+              disabled={payVerifyLoading || !payPasteToken.trim()}
+            >
+              {payVerifyLoading ? "Verifying..." : "Verify Payment"}
+            </button>
+            {payVerifyResult && (
+              <div style={{ marginTop: "0.75rem", padding: "0.75rem", background: "#0a1a0a", borderRadius: "0.5rem", border: "1px solid #2a4a2a" }}>
+                <p style={{ color: "#4ade80", fontWeight: 600, marginBottom: "0.25rem" }}>
+                  {payVerifyResult.friendly_name} — {payVerifyResult.amount.toLocaleString()} sats
+                </p>
+                <p style={{ color: "#999", fontSize: "0.85rem" }}>
+                  Address: <code style={{ color: "#ccc", fontSize: "0.8rem" }}>{payVerifyResult.address}</code>
+                </p>
+              </div>
+            )}
+          </PhaseCard>
+
           {/* Stats */}
           <div className="stats-row">
             <div className="stat-card">

@@ -27,17 +27,26 @@ MINER_RESULT=$(veiled-wallet <<< "{\"command\":\"get-address\",\"state_path\":\"
 MINER_ADDR=$(echo "$MINER_RESULT" | grep -o '"address":"[^"]*"' | head -1 | cut -d'"' -f4)
 echo "Miner address: $MINER_ADDR"
 
-# Mine 10 blocks to miner (coinbase rewards), then 101 maturity blocks to a
-# throwaway address. This keeps the miner wallet with only 10 UTXOs instead of
-# 200+, making subsequent sends fast (~1s vs ~80s).
-echo "Mining 10 blocks to miner..."
-veiled-wallet <<< "{\"command\":\"faucet\",\"address\":\"$MINER_ADDR\",\"blocks\":10,$RPC_ARGS}" >/dev/null
+# Check miner balance — if already funded from a previous run, skip mining.
+BALANCE_RESULT=$(veiled-wallet <<< "{\"command\":\"get-balance\",\"state_path\":\"$WALLETS_DIR/miner.json\",$RPC_ARGS}" 2>/dev/null || echo '{}')
+MINER_BALANCE=$(echo "$BALANCE_RESULT" | grep -o '"confirmed":[0-9]*' | head -1 | cut -d: -f2)
+MINER_BALANCE=${MINER_BALANCE:-0}
 
-# Create a throwaway address for maturity mining
-THROWAWAY_RESULT=$(veiled-wallet <<< "{\"command\":\"create-wallet\",\"state_path\":\"$WALLETS_DIR/throwaway.json\",\"name\":\"throwaway\",$RPC_ARGS}")
-THROWAWAY_ADDR=$(echo "$THROWAWAY_RESULT" | grep -o '"address":"[^"]*"' | head -1 | cut -d'"' -f4)
-echo "Mining 101 maturity blocks to throwaway ($THROWAWAY_ADDR)..."
-veiled-wallet <<< "{\"command\":\"faucet\",\"address\":\"$THROWAWAY_ADDR\",\"blocks\":101,$RPC_ARGS}" >/dev/null
+if [ "$MINER_BALANCE" -ge 100000000 ]; then
+    echo "Miner already has ${MINER_BALANCE} sats — skipping mining."
+else
+    # Mine 10 blocks to miner (coinbase rewards), then 101 maturity blocks to a
+    # throwaway address. This keeps the miner wallet with only 10 UTXOs instead of
+    # 200+, making subsequent sends fast (~1s vs ~80s).
+    echo "Mining 10 blocks to miner..."
+    veiled-wallet <<< "{\"command\":\"faucet\",\"address\":\"$MINER_ADDR\",\"blocks\":10,$RPC_ARGS}" >/dev/null
+
+    # Create a throwaway address for maturity mining
+    THROWAWAY_RESULT=$(veiled-wallet <<< "{\"command\":\"create-wallet\",\"state_path\":\"$WALLETS_DIR/throwaway.json\",\"name\":\"throwaway\",$RPC_ARGS}")
+    THROWAWAY_ADDR=$(echo "$THROWAWAY_RESULT" | grep -o '"address":"[^"]*"' | head -1 | cut -d'"' -f4)
+    echo "Mining 101 maturity blocks to throwaway ($THROWAWAY_ADDR)..."
+    veiled-wallet <<< "{\"command\":\"faucet\",\"address\":\"$THROWAWAY_ADDR\",\"blocks\":101,$RPC_ARGS}" >/dev/null
+fi
 
 # Wait for registry wallet to exist (created by the registry entrypoint)
 echo "Waiting for registry wallet..."

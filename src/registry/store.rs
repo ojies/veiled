@@ -2,18 +2,15 @@ use crate::core::registry::Registry;
 use crate::core::Merchant;
 use crate::registry::db;
 use crate::registry::service::MerchantInfo;
-use crate::registry::wallet::{btc_value_to_sats, create_bdk_wallet, derive_wallet_address, generate_mnemonic, sync_bdk_wallet};
-use bdk_bitcoind_rpc::bitcoincore_rpc::{Client, RpcApi};
-use bdk_wallet::bitcoin::FeeRate;
-#[allow(deprecated)]
-use bdk_wallet::SignOptions;
+use crate::registry::wallet::RegistryWallet;
+use bdk_bitcoind_rpc::bitcoincore_rpc::Client;
 use bitcoin::hashes::Hash;
-use bitcoin::{Address, OutPoint, Txid};
+use bitcoin::{OutPoint, Txid};
 use rusqlite::Connection as SqlConnection;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
-use tracing::{info, warn};
+use tracing::info;
 
 pub struct ActiveSet {
     pub registry: Registry,
@@ -26,11 +23,7 @@ pub struct ActiveSet {
 pub struct RegistryStore {
     pub merchant_pool: HashMap<String, MerchantInfo>,
     pub active_sets: HashMap<[u8; 32], ActiveSet>,
-    pub rpc_client: Option<Arc<Client>>,
-    pub wallet_mnemonic: String,
-    pub wallet_address: Address,
-    /// 32-byte x-only public key from the BDK wallet's P2TR address.
-    pub wallet_xonly_bytes: Vec<u8>,
+    pub wallet: RegistryWallet,
     /// Minimum merchants needed to auto-create a set.
     /// Beneficiary capacity per set.
     db: Option<SqlConnection>,
@@ -49,16 +42,10 @@ impl RegistryStore {
         rpc_client: Option<Arc<Client>>,
         db: Option<SqlConnection>,
     ) -> Self {
-        let mnemonic = generate_mnemonic();
-        let (wallet_address, wallet_xonly_bytes) =
-            derive_wallet_address(&mnemonic).expect("failed to derive wallet address");
         Self {
             merchant_pool: HashMap::new(),
             active_sets: HashMap::new(),
-            rpc_client,
-            wallet_mnemonic: mnemonic.to_string(),
-            wallet_address,
-            wallet_xonly_bytes,
+            wallet: RegistryWallet::new(rpc_client),
             db,
         }
     }
@@ -78,7 +65,7 @@ impl RegistryStore {
         }
 
         info!("Verifying merchant '{}' payment: tx {}:{}", name, outpoint.txid, outpoint.vout);
-        self.verify_payment(&outpoint, required_fee)?;
+        self.wallet.verify_payment(&outpoint, required_fee)?;
 
         let merchant = Merchant::new(name, origin);
         self.merchant_pool.insert(
@@ -97,63 +84,11 @@ impl RegistryStore {
         Ok(())
     }
 
-    pub fn verify_payment(&self, outpoint: &OutPoint, required_sats: u64) -> Result<(), String> {
-        let Some(rpc) = &self.rpc_client else {
-            info!("  no RPC client — skipping on-chain payment verification");
-            return Ok(());
-        };
-
-        let expected_address = self.wallet_address.to_string();
-        info!("Verifying payment: tx {}:{}, expect >= {} sats to {}", outpoint.txid, outpoint.vout, required_sats, &expected_address[..20]);
-
-        let raw_tx: serde_json::Value = rpc
-            .call(
-                "getrawtransaction",
-                &[
-                    serde_json::json!(outpoint.txid.to_string()),
-                    serde_json::json!(true),
-                ],
-            )
-            .map_err(|e| format!("Failed to fetch transaction {}: {}", outpoint.txid, e))?;
-
-        let vout_array = raw_tx["vout"]
-            .as_array()
-            .ok_or("Transaction has no vout array")?;
-        let output = vout_array
-            .get(outpoint.vout as usize)
-            .ok_or(format!("vout index {} not found in tx", outpoint.vout))?;
-
-        let script_address = output["scriptPubKey"]["address"]
-            .as_str()
-            .ok_or("Output has no address")?;
-        if script_address != expected_address {
-            warn!("  address mismatch: expected {}, got {}", expected_address, script_address);
-            return Err(format!(
-                "Payment output address mismatch: expected {}, got {}",
-                expected_address, script_address
-            ));
-        }
-
-        let value_sats = btc_value_to_sats(&output["value"])?;
-        info!("  vout[{}]: {} sats to {} (need >= {})", outpoint.vout, value_sats, script_address, required_sats);
-        if value_sats < required_sats {
-            warn!("  payment too low: {} < {}", value_sats, required_sats);
-            return Err(format!(
-                "Payment amount too low: expected {} sats, got {} sats",
-                required_sats, value_sats
-            ));
-        }
-
-        info!("  payment verified OK");
-        Ok(())
-    }
-
     pub fn get_anonymity_set(&self, set_id: [u8; 32]) -> Result<&ActiveSet, String> {
         self.active_sets
             .get(&set_id)
             .ok_or_else(|| format!("Set {} not found", hex::encode(set_id)))
     }
-
 
     pub fn get_registry_address(&self, set_id: [u8; 32]) -> Result<(String, Vec<u8>), String> {
         // all-zero set_id returns the global wallet address (used by merchants before sets exist)
@@ -162,11 +97,7 @@ impl RegistryStore {
                 .get(&set_id)
                 .ok_or_else(|| format!("Set {} not found", hex::encode(set_id)))?;
         }
-
-        Ok((
-            self.wallet_address.to_string(),
-            self.wallet_xonly_bytes.clone(),
-        ))
+        Ok(self.wallet.get_address())
     }
 
     pub fn get_crs(&self, set_id: [u8; 32]) -> Result<&Registry, String> {
@@ -193,66 +124,7 @@ impl RegistryStore {
         info!("Commitment output: {} sats, script {} bytes", output_amount, output_script.len());
 
         // Fund, sign, and broadcast using BDK wallet
-        let btc_txid: Txid = if let Some(rpc) = &self.rpc_client {
-            let mnemonic: bip39::Mnemonic = self
-                .wallet_mnemonic
-                .parse()
-                .map_err(|e| format!("parse mnemonic: {e}"))?;
-            let mut bdk = create_bdk_wallet(&mnemonic)?;
-            info!("Syncing registry BDK wallet for commitment tx...");
-            sync_bdk_wallet(&mut bdk, rpc)?;
-
-            let balance = bdk.balance();
-            info!(
-                "Registry wallet balance: {} confirmed, {} pending, {} immature",
-                balance.confirmed.to_sat(),
-                balance.trusted_pending.to_sat() + balance.untrusted_pending.to_sat(),
-                balance.immature.to_sat()
-            );
-
-            let bdk_script =
-                bdk_wallet::bitcoin::ScriptBuf::from_bytes(output_script.to_bytes());
-            let bdk_amount = bdk_wallet::bitcoin::Amount::from_sat(output_amount);
-
-            let mut builder = bdk.build_tx();
-            builder
-                .add_recipient(bdk_script, bdk_amount)
-                .fee_rate(FeeRate::from_sat_per_vb(2).expect("valid fee rate"));
-
-            let mut psbt = builder
-                .finish()
-                .map_err(|e| format!("Failed to build commitment tx: {e}"))?;
-
-            #[allow(deprecated)]
-            let finalized = bdk
-                .sign(&mut psbt, SignOptions::default())
-                .map_err(|e| format!("Failed to sign commitment tx: {e}"))?;
-            if !finalized {
-                return Err("Commitment transaction signing incomplete".into());
-            }
-
-            let tx = psbt
-                .extract_tx()
-                .map_err(|e| format!("Failed to extract commitment tx: {e}"))?;
-            let txid = tx.compute_txid();
-            let fee = bdk.calculate_fee(&tx).unwrap_or(bdk_wallet::bitcoin::Amount::ZERO);
-
-            info!(
-                "Broadcasting commitment tx: {} ({} vbytes, fee: {} sats)",
-                txid,
-                tx.vsize(),
-                fee.to_sat()
-            );
-            rpc.send_raw_transaction(&tx)
-                .map_err(|e| format!("Failed to broadcast commitment tx: {e}"))?;
-
-            info!("Commitment tx broadcast OK: {}", txid);
-            let bdk_bytes: [u8; 32] = *txid.as_byte_array();
-            Txid::from_raw_hash(bitcoin::hashes::sha256d::Hash::from_byte_array(bdk_bytes))
-        } else {
-            info!("No RPC client — generating deterministic dummy txid");
-            Txid::from_raw_hash(bitcoin::hashes::sha256d::Hash::hash(output_script.as_bytes()))
-        };
+        let btc_txid = self.wallet.fund_and_broadcast(&output_script, output_amount)?;
 
         let set_id: [u8; 32] = btc_txid.to_byte_array();
 
@@ -275,5 +147,107 @@ impl RegistryStore {
 
         info!("create_tx OK: commitment txid {}", btc_txid);
         Ok(btc_txid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::registry::Registry;
+
+    fn store() -> RegistryStore {
+        RegistryStore::new(None, None)
+    }
+
+    #[test]
+    fn new_store_is_empty() {
+        let s = store();
+        assert!(s.merchant_pool.is_empty());
+        assert!(s.active_sets.is_empty());
+    }
+
+    #[test]
+    fn add_merchant_succeeds_without_rpc() {
+        let mut s = store();
+        let result = s.add_merchant(
+            "acme", "https://acme.example", "a@acme.com".into(), "555-0100".into(),
+            OutPoint::null(), 0, 1000,
+        );
+        assert!(result.is_ok());
+        assert!(s.merchant_pool.contains_key("acme"));
+    }
+
+    #[test]
+    fn add_merchant_rejects_duplicate() {
+        let mut s = store();
+        s.add_merchant(
+            "acme", "https://acme.example", "a@acme.com".into(), "555-0100".into(),
+            OutPoint::null(), 0, 1000,
+        ).unwrap();
+        let err = s.add_merchant(
+            "acme", "https://acme.example", "a@acme.com".into(), "555-0100".into(),
+            OutPoint::null(), 0, 1000,
+        ).unwrap_err();
+        assert!(err.contains("already registered"));
+    }
+
+    #[test]
+    fn get_registry_address_zero_set_id_returns_wallet_address() {
+        let s = store();
+        let (addr, xonly) = s.get_registry_address([0u8; 32]).unwrap();
+        assert_eq!(addr, s.wallet.address.to_string());
+        assert_eq!(xonly, s.wallet.xonly_bytes);
+    }
+
+    #[test]
+    fn get_registry_address_unknown_set_id_errors() {
+        let s = store();
+        let err = s.get_registry_address([1u8; 32]).unwrap_err();
+        assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn get_anonymity_set_unknown_errors() {
+        let s = store();
+        assert!(s.get_anonymity_set([0u8; 32]).is_err());
+    }
+
+    #[test]
+    fn get_crs_unknown_errors() {
+        let s = store();
+        assert!(s.get_crs([0u8; 32]).is_err());
+    }
+
+    fn registry_with_beneficiary() -> Registry {
+        use crate::core::types::Commitment;
+        let mut r = Registry::new(4, 1000);
+        r.add_beneficiary(Commitment([0u8; 33]), OutPoint::null());
+        r
+    }
+
+    #[test]
+    fn create_tx_inserts_active_set_without_rpc() {
+        let mut s = store();
+        let mut registry = registry_with_beneficiary();
+        let txid = s.create_tx(&mut registry, 4, 1000).unwrap();
+        let set_id: [u8; 32] = txid.to_byte_array();
+        let active = s.get_anonymity_set(set_id).unwrap();
+        assert_eq!(active.beneficiary_capacity, 4);
+        assert_eq!(active.sats_per_user, 1000);
+        assert!(active.finalized);
+    }
+
+    #[test]
+    fn create_tx_makes_set_retrievable_by_txid() {
+        let mut s = store();
+        let mut registry = registry_with_beneficiary();
+        let txid = s.create_tx(&mut registry, 4, 1000).unwrap();
+        let set_id: [u8; 32] = txid.to_byte_array();
+        // address lookup succeeds for the new set_id
+        let (addr, xonly) = s.get_registry_address(set_id).unwrap();
+        assert_eq!(addr, s.wallet.address.to_string());
+        assert_eq!(xonly.len(), 32);
+        // crs lookup succeeds
+        assert!(s.get_crs(set_id).is_ok());
     }
 }

@@ -436,31 +436,19 @@ fn handle_send(params: serde_json::Value) -> Result<serde_json::Value, String> {
         balance.immature.to_sat()
     );
 
-    // If BDK shows 0 spendable but we need funds, the checkpoint may have
-    // jumped past the funding block. Reset checkpoint to (tip - 200) and
-    // resync the recent window where funding likely happened.
+    // If BDK shows 0 spendable but we need funds, the checkpoint may be ahead
+    // of the funding block (e.g. after consecutive sends from the same wallet
+    // where a later sync saved the tip as checkpoint, losing UTXO knowledge
+    // from a no-persist wallet). Reset checkpoint to genesis and resync fully
+    // so all accumulated UTXOs are visible regardless of chain height.
     if total == 0 && p.amount_sats > 0 {
-        let tip_height: u64 = {
-            let empty: Vec<serde_json::Value> = vec![];
-            rpc.call("getblockcount", &empty).unwrap_or(0)
-        };
-        let resync_from = tip_height.saturating_sub(200);
         eprintln!(
-            "[wallet] {} has 0 spendable — resyncing from height {} (tip={}, window=200)",
-            state.wallet_name, resync_from, tip_height
+            "[wallet] {} has 0 spendable — resyncing from genesis",
+            state.wallet_name
         );
         let mut fresh_state = load_state(&p.state_path)?;
-        if resync_from == 0 {
-            fresh_state.checkpoint_height = None;
-            fresh_state.checkpoint_hash = None;
-        } else {
-            // Get the block hash at resync_from
-            let hash: String = rpc
-                .call("getblockhash", &[serde_json::json!(resync_from)])
-                .map_err(|e| format!("getblockhash: {e}"))?;
-            fresh_state.checkpoint_height = Some(resync_from as u32);
-            fresh_state.checkpoint_hash = Some(hash);
-        }
+        fresh_state.checkpoint_height = None;
+        fresh_state.checkpoint_hash = None;
         save_state(&p.state_path, &fresh_state)?;
         wallet = recreate_wallet(&fresh_state)?;
         sync_wallet(&mut wallet, &rpc)?;

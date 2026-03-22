@@ -35,6 +35,14 @@ export interface PaymentResult {
   amount: number;
   address: string; // P2TR bc1p...
   friendly_name: string;
+  token?: string;  // base64 payment token (for beneficiary-side display)
+}
+
+export interface MerchantPayment {
+  beneficiary: string;   // friendly_name from registered_identities lookup
+  pseudonym: string;     // 66-char hex
+  amount: number;        // sats
+  address: string;       // P2TR bcrt1p... address
 }
 
 export interface AnonymitySet {
@@ -51,12 +59,21 @@ export interface WalletInfo {
   role: "registry" | "merchant" | "beneficiary";
 }
 
+export interface MerchantIdentity {
+  friendly_name: string;
+  pseudonym: string;
+  nullifier: string;
+}
+
 export interface MerchantProcess {
   name: string;
   origin: string;
+  merchant_id: number;
   port: number;
   pid: number;
   status: "pending" | "starting" | "running" | "stopped";
+  registered_identities?: MerchantIdentity[];
+  pending_payments?: MerchantPayment[];
   spawnParams?: {
     fundingTxid: string;
     fundingVout: number;

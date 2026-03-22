@@ -15,23 +15,12 @@ export async function GET(request: Request) {
   }
 
   const state = getState();
-  const payments: {
-    beneficiary: string;
-    amount: number;
-    address: string;
-  }[] = [];
-
-  for (const [name, ben] of Object.entries(state.beneficiaries)) {
-    for (const pay of ben.payments) {
-      if (pay.merchant_name === merchant) {
-        payments.push({
-          beneficiary: name,
-          amount: pay.amount,
-          address: pay.address,
-        });
-      }
-    }
-  }
+  const proc = state.merchant_processes[merchant];
+  const payments = (proc?.pending_payments ?? []).map((p) => ({
+    beneficiary: p.beneficiary,
+    amount: p.amount,
+    address: p.address,
+  }));
 
   return NextResponse.json({ merchant, payments });
 }
